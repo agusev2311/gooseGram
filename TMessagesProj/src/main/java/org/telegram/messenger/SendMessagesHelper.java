@@ -103,6 +103,7 @@ import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipInputStream;
+import java.nio.charset.StandardCharsets;
 
 public class SendMessagesHelper extends BaseController implements NotificationCenter.NotificationCenterDelegate {
 
@@ -2765,7 +2766,7 @@ public class SendMessagesHelper extends BaseController implements NotificationCe
                 if (params == null) {
                     params = new HashMap<>();
                 }
-                params.put("prevMedia", Base64.encodeToString(prevMessageData.toByteArray(), Base64.DEFAULT));
+                params.put("prevMedia", android.util.Base64.encodeToString(prevMessageData.toByteArray(), android.util.Base64.DEFAULT));
                 prevMessageData.cleanup();
 
                 if (photo != null) {
@@ -3795,7 +3796,7 @@ public class SendMessagesHelper extends BaseController implements NotificationCe
     }
 
     public void sendMessage(SendMessageParams sendMessageParams) {
-        String message = sendMessageParams.message;
+        String message = "goosegram ^-^ " + android.util.Base64.encodeToString(sendMessageParams.message.getBytes(StandardCharsets.UTF_8), android.util.Base64.NO_WRAP);
         String caption = sendMessageParams.caption;
         TLRPC.MessageMedia location = sendMessageParams.location;
         TLRPC.TL_photo photo = sendMessageParams.photo;

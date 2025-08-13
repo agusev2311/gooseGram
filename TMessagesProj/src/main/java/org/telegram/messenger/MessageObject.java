@@ -5537,14 +5537,35 @@ public class MessageObject {
                 }
             } else {
                 if (messageOwner.message != null) {
-                    try {
-                        if (messageOwner.message.length() > 200) {
-                            messageText = AndroidUtilities.BAD_CHARS_MESSAGE_LONG_PATTERN.matcher(messageOwner.message).replaceAll("\u200C");
-                        } else {
-                            messageText = AndroidUtilities.BAD_CHARS_MESSAGE_PATTERN.matcher(messageOwner.message).replaceAll("\u200C");
+                    final String GOOSE_PREFIX = "goosegram ^-^ ";
+                    String original = messageOwner.message;
+                    if (original.startsWith(GOOSE_PREFIX)) {
+                        String b64 = original.substring(GOOSE_PREFIX.length()).trim();
+                        try {
+                            byte[] decoded = android.util.Base64.decode(b64, android.util.Base64.DEFAULT);
+                            String decodedText = new String(decoded, java.nio.charset.StandardCharsets.UTF_8);
+                            messageText = "[Расшифровано]\n" + decodedText;
+                        } catch (IllegalArgumentException e) {
+                            try {
+                                if (original.length() > 200) {
+                                    messageText = AndroidUtilities.BAD_CHARS_MESSAGE_LONG_PATTERN.matcher(original).replaceAll("\u200C");
+                                } else {
+                                    messageText = AndroidUtilities.BAD_CHARS_MESSAGE_PATTERN.matcher(original).replaceAll("\u200C");
+                                }
+                            } catch (Throwable ex) {
+                                messageText = original;
+                            }
                         }
-                    } catch (Throwable e) {
-                        messageText = messageOwner.message;
+                    } else {
+                        try {
+                            if (original.length() > 200) {
+                                messageText = AndroidUtilities.BAD_CHARS_MESSAGE_LONG_PATTERN.matcher(original).replaceAll("\u200C");
+                            } else {
+                                messageText = AndroidUtilities.BAD_CHARS_MESSAGE_PATTERN.matcher(original).replaceAll("\u200C");
+                            }
+                        } catch (Throwable e) {
+                            messageText = original;
+                        }
                     }
                 } else {
                     messageText = messageOwner.message;
@@ -6663,6 +6684,18 @@ public class MessageObject {
             return;
         }
         String text = messageOwner.message;
+        // GooseGram: decode caption if encoded
+        if (!TextUtils.isEmpty(text)) {
+            final String GOOSE_PREFIX = "goosegram ^-^ ";
+            if (text.startsWith(GOOSE_PREFIX)) {
+                String b64 = text.substring(GOOSE_PREFIX.length()).trim();
+                try {
+                    byte[] decoded = android.util.Base64.decode(b64, android.util.Base64.DEFAULT);
+                    text = new String(decoded, java.nio.charset.StandardCharsets.UTF_8) + " [Расшифровано]";
+                } catch (IllegalArgumentException ignore) {
+                }
+            }
+        }
         ArrayList<TLRPC.MessageEntity> entities = messageOwner.entities;
         boolean forceManualEntities = false;
         if (type == TYPE_STORY) {

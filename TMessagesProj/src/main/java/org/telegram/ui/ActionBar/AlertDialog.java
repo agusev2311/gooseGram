@@ -113,6 +113,10 @@ public class AlertDialog extends Dialog implements Drawable.Callback, Notificati
     private int customViewOffset = 12;
     private boolean withCancelDialog;
 
+    public TextView getMessageTextView() {
+        return messageTextView;
+    }
+
     private int dialogButtonColorKey = Theme.key_dialogButton;
 
     private OnCancelListener onCancelListener;
@@ -649,7 +653,6 @@ public class AlertDialog extends Dialog implements Drawable.Callback, Notificati
                 drawBackground = false;
             }
         }
-        containerView.setFitsSystemWindows(Build.VERSION.SDK_INT >= 21);
         View rootView = containerView;
         if (needStarsBalance) {
             if (fullscreenContainerView == null) {
@@ -657,7 +660,6 @@ public class AlertDialog extends Dialog implements Drawable.Callback, Notificati
                 fullscreenContainerView.setOnClickListener(v -> {
                     dismiss();
                 });
-//                fullscreenContainerView.setFitsSystemWindows(Build.VERSION.SDK_INT >= 21);
             }
             if (starsBalanceCloud == null) {
                 starsBalanceCloud = new BalanceCloud(getContext(), UserConfig.selectedAccount, resourcesProvider);

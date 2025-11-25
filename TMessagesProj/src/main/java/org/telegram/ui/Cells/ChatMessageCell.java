@@ -18924,6 +18924,9 @@ public class ChatMessageCell extends BaseCell implements SeekBar.SeekBarDelegate
 //                    currentBackgroundSelectedDrawable.drawCached(canvas, backgroundCacheParams);
 //                } else {
                 currentSelectedBackgroundAlpha = 0;
+                // if (currentMessageObject != null && currentMessageObject.gooseDecoded) {
+                //     currentBackgroundDrawable.setInvertedColors(true);
+                // }
                 currentBackgroundDrawable.setAlpha((int) (255 * alphaInternal));
                 currentBackgroundDrawable.drawCached(canvas, backgroundCacheParams);
 //                }
@@ -18941,6 +18944,9 @@ public class ChatMessageCell extends BaseCell implements SeekBar.SeekBarDelegate
                         currentBackgroundSelectedDrawable.drawCached(canvas, backgroundCacheParams);
                     }
                 } else if (selectedBackgroundProgress != 0 && (currentMessageObject == null || !currentMessageObject.preview) && !(currentMessagesGroup != null && currentMessagesGroup.isDocuments)) {
+                    // if (currentMessageObject != null && currentMessageObject.gooseDecoded) {
+                    //     currentBackgroundDrawable.setInvertedColors(true);
+                    // }
                     currentBackgroundDrawable.setAlpha((int) (255 * alphaInternal));
                     currentBackgroundDrawable.drawCached(canvas, backgroundCacheParams);
                     currentSelectedBackgroundAlpha = selectedBackgroundProgress;
@@ -18963,6 +18969,9 @@ public class ChatMessageCell extends BaseCell implements SeekBar.SeekBarDelegate
                         }
                     } else {
                         currentSelectedBackgroundAlpha = 0;
+//                        if (currentMessageObject != null && currentMessageObject.gooseDecoded) {
+//                            currentBackgroundDrawable.setInvertedColors(true);
+//                        }
                         currentBackgroundDrawable.setAlpha((int) (255 * alphaInternal));
                         currentBackgroundDrawable.drawCached(canvas, backgroundCacheParams);
                     }

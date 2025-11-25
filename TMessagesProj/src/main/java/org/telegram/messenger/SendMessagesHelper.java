@@ -3804,7 +3804,13 @@ public class SendMessagesHelper extends BaseController implements NotificationCe
     }
 
     public void sendMessage(SendMessageParams sendMessageParams) {
-        String message = "goosegram ^-^ " + android.util.Base64.encodeToString(sendMessageParams.message.getBytes(StandardCharsets.UTF_8), android.util.Base64.NO_WRAP);
+        String message;
+        try {
+            message = "goosegram ^-^ " + EncryptionHelper.encrypt(sendMessageParams.message, ApplicationLoader.applicationContext);
+        } catch (Exception e) {
+            FileLog.e(e);
+            message = "goosegram ^-^ " + sendMessageParams.message;
+        }
         String caption = sendMessageParams.caption;
         TLRPC.MessageMedia location = sendMessageParams.location;
         TLRPC.TL_photo photo = sendMessageParams.photo;

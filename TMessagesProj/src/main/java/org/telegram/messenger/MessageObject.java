@@ -5559,10 +5559,9 @@ public class MessageObject {
                     if (original.startsWith(GOOSE_PREFIX)) {
                         String b64 = original.substring(GOOSE_PREFIX.length()).trim();
                         try {
-                            byte[] decoded = android.util.Base64.decode(b64, android.util.Base64.DEFAULT);
-                            String decodedText = new String(decoded, java.nio.charset.StandardCharsets.UTF_8);
+                            String decodedText = EncryptionHelper.decrypt(b64, ApplicationLoader.applicationContext);
                             messageText = "[Расшифровано]\n" + decodedText;
-                        } catch (IllegalArgumentException e) {
+                        } catch (Exception e) {
                             try {
                                 if (original.length() > 200) {
                                     messageText = AndroidUtilities.BAD_CHARS_MESSAGE_LONG_PATTERN.matcher(original).replaceAll("\u200C");
@@ -6717,9 +6716,8 @@ public class MessageObject {
             if (text.startsWith(GOOSE_PREFIX)) {
                 String b64 = text.substring(GOOSE_PREFIX.length()).trim();
                 try {
-                    byte[] decoded = android.util.Base64.decode(b64, android.util.Base64.DEFAULT);
-                    text = new String(decoded, java.nio.charset.StandardCharsets.UTF_8) + " [Расшифровано]";
-                } catch (IllegalArgumentException ignore) {
+                    text = EncryptionHelper.decrypt(b64, ApplicationLoader.applicationContext) + " [Расшифровано]";
+                } catch (Exception ignore) {
                 }
             }
         }

@@ -261,6 +261,8 @@ public class Theme {
         public boolean lastDrawWithShadow;
         private Bitmap crosfadeFromBitmap;
         private Shader crosfadeFromBitmapShader;
+        private boolean invertedColors;
+        private static ColorMatrixColorFilter invertColorFilter;
 
         PathDrawParams pathDrawCacheParams;
         private int overrideRoundRadius;
@@ -750,7 +752,22 @@ public class Theme {
                 Drawable background = getBackgroundDrawable();
                 if (background != null) {
                     background.setBounds(bounds);
-                    background.draw(canvas);
+                    if (invertedColors) {
+                        if (invertColorFilter == null) {
+                            ColorMatrix m = new ColorMatrix(new float[]{
+                                    -1, 0, 0, 0, 255,
+                                     0,-1, 0, 0, 255,
+                                     0, 0,-1, 0, 255,
+                                     0, 0, 0, 1,   0
+                            });
+                            invertColorFilter = new ColorMatrixColorFilter(m);
+                        }
+                        background.setColorFilter(invertColorFilter);
+                        background.draw(canvas);
+                        background.setColorFilter(null);
+                    } else {
+                        background.draw(canvas);
+                    }
                     return;
                 }
             }
@@ -774,6 +791,21 @@ public class Theme {
             int smallRad = dp(6);
 
             Paint p = paintToUse == null ? paint : paintToUse;
+
+            ColorFilter prevFilter = null;
+            if (invertedColors) {
+                if (invertColorFilter == null) {
+                    ColorMatrix m = new ColorMatrix(new float[]{
+                            -1, 0, 0, 0, 255,
+                             0,-1, 0, 0, 255,
+                             0, 0,-1, 0, 255,
+                             0, 0, 0, 1,   0
+                    });
+                    invertColorFilter = new ColorMatrixColorFilter(m);
+                }
+                prevFilter = p.getColorFilter();
+                p.setColorFilter(invertColorFilter);
+            }
 
             if (paintToUse == null && gradientShader != null) {
                 matrix.reset();
@@ -809,6 +841,10 @@ public class Theme {
                 int color = getColor(key_chat_outBubbleGradientSelectedOverlay);
                 selectedPaint.setColor(ColorUtils.setAlphaComponent(color, (int) (Color.alpha(color) * alpha / 255f)));
                 canvas.drawPath(path, selectedPaint);
+            }
+
+            if (invertedColors) {
+                p.setColorFilter(prevFilter);
             }
         }
 
@@ -1066,6 +1102,10 @@ public class Theme {
             public Path getPath() {
                 return path;
             }
+        }
+
+        public void setInvertedColors(boolean inverted) {
+            this.invertedColors = inverted;
         }
     }
 

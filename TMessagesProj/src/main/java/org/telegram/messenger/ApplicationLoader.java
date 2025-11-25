@@ -54,6 +54,14 @@ import java.io.File;
 import java.util.ArrayList;
 import java.util.Locale;
 
+import java.security.KeyPair;
+import java.security.KeyPairGenerator;
+import java.security.PrivateKey;
+import java.security.PublicKey;
+import java.security.interfaces.RSAPrivateKey;
+import java.security.interfaces.RSAPublicKey;
+import java.util.Base64;
+
 public class ApplicationLoader extends Application {
 
     public static ApplicationLoader applicationLoaderInstance;
@@ -187,6 +195,32 @@ public class ApplicationLoader extends Application {
         }
         applicationInited = true;
         NativeLoader.initNativeLibs(ApplicationLoader.applicationContext);
+
+        // --- RSA key generation and storage ---
+        try {
+            SharedPreferences prefs = applicationContext.getSharedPreferences("encryption_keys", Context.MODE_PRIVATE);
+            String publicKeyStr = prefs.getString("rsa_public", null);
+            String privateKeyStr = prefs.getString("rsa_private", null);
+            if (publicKeyStr == null || privateKeyStr == null) {
+                KeyPairGenerator keyGen = KeyPairGenerator.getInstance("RSA");
+                keyGen.initialize(2048);
+                KeyPair pair = keyGen.generateKeyPair();
+                PublicKey publicKey = pair.getPublic();
+                PrivateKey privateKey = pair.getPrivate();
+                String pub = Base64.getEncoder().encodeToString(publicKey.getEncoded());
+                String priv = Base64.getEncoder().encodeToString(privateKey.getEncoded());
+                prefs.edit().putString("rsa_public", pub).putString("rsa_private", priv).apply();
+                if (BuildVars.LOGS_ENABLED) {
+                    FileLog.d("RSA key pair generated and saved");
+                }
+            } else {
+                if (BuildVars.LOGS_ENABLED) {
+                    FileLog.d("RSA key pair already exists");
+                }
+            }
+        } catch (Exception e) {
+            FileLog.e(e);
+        }
 
         try {
             LocaleController.getInstance(); //TODO improve

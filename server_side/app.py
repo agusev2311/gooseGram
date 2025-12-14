@@ -5,6 +5,7 @@ import super_secret_config
 import threading
 from datetime import datetime, timezone
 import secrets
+import os
 
 
 db = SQLAlchemy()
@@ -58,9 +59,9 @@ def send_welcome(message):
         return
     user = User.query.filter_by(id=message.from_user.id).first()
     if not user.is_verified:
-        bot.send_message(message, user.verify_secret)
+        bot.send_message(message.from_user.id, user.verify_secret)
     else:
-        bot.send_message(message, "You are already verified!")
+        bot.send_message(message.from_user.id, "You are already verified!")
 
 def run_bot():
     bot.infinity_polling()
@@ -84,13 +85,13 @@ def register_user():
         return flask.jsonify({"error": "userid is required"}), 400
     if userid <= 0:
         return flask.jsonify({"error": "invalid userid"}), 400
-    if not userid.isgigit():
+    if not str(userid).isdigit():
         return flask.jsonify({"error": "invalid userid"}), 400
     existing_user = User.query.filter_by(id=userid).first()
     if existing_user:
         return flask.jsonify({"error": "user already registered"}), 400
     create_user(userid)
-    return flask.jsonify({"status": "user registered successfully. Now send /start to our bot"}), 200
+    return flask.jsonify({"status": "user registered successfully. Now send /start to our bot. ID: 7169656470"}), 200
 
 @app.route("/api/v1/verify", methods=["POST"])
 def verify():
@@ -122,6 +123,8 @@ def get_public_key(userid):
     return flask.jsonify({"public_key": user.public_key}), 200
 
 if __name__ == '__main__':
-    threading.Thread(target=run_bot, daemon=True).start()
+    # Only start bot in the main process, not in Flask's reloader
+    if os.environ.get('WERKZEUG_RUN_MAIN') == 'true':
+        threading.Thread(target=run_bot, daemon=True).start()
 
-    app.run(host="0.0.0.0", debug=True, port=8080)
+    app.run(host="0.0.0.0", debug=True, port=8080, use_reloader=True)

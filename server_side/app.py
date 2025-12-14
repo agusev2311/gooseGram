@@ -1,6 +1,7 @@
 import flask
 from flask_sqlalchemy import SQLAlchemy
 import telebot
+from sqlalchemy.exc import IntegrityError
 import super_secret_config
 import threading
 from datetime import datetime, timezone
@@ -109,6 +110,19 @@ def verify():
         return flask.jsonify({"error": "user already verified"}), 400
     if user.verify_secret != verify_secret:
         return flask.jsonify({"error": "invalid verify_secret"}), 400
+    # Ensure the provided public_key is not already bound to another user
+    existing = User.query.filter_by(public_key=public_key).first()
+    if existing is not None and existing.id != userid:
+        return flask.jsonify({"error": "public_key already in use by another user"}), 400
+
+    try:
+        if verify_user(userid, public_key):
+            return flask.jsonify({"status": "user verified successfully"}), 200
+        else:
+            return flask.jsonify({"error": "user not found"}), 404
+    except IntegrityError:
+        db.session.rollback()
+        return flask.jsonify({"error": "public_key already in use"}), 400
     if verify_user(userid, public_key):
         return flask.jsonify({"status": "user verified successfully"}), 200
     else:

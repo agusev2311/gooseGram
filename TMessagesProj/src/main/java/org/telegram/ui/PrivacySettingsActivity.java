@@ -37,6 +37,8 @@ import androidx.recyclerview.widget.RecyclerView;
 
 import org.telegram.messenger.AccountInstance;
 import org.telegram.messenger.AndroidUtilities;
+import org.telegram.messenger.ApplicationLoader;
+import org.telegram.messenger.ServerClient;
 import org.telegram.messenger.ContactsController;
 import org.telegram.messenger.FileLog;
 import org.telegram.messenger.LocaleController;
@@ -109,6 +111,8 @@ public class PrivacySettingsActivity extends BaseFragment implements Notificatio
     private int newChatsHeaderRow;
     private int newChatsRow;
     private int newChatsSectionRow;
+    private int registerRow;
+    private int serverAddressRow;
     private int advancedSectionRow;
     private int deleteAccountRow;
     private int deleteAccountDetailRow;
@@ -612,6 +616,81 @@ public class PrivacySettingsActivity extends BaseFragment implements Notificatio
                 presentFragment(new PassportActivity(PassportActivity.TYPE_PASSWORD, 0, "", "", null, null, null, null, null));
             } else if (position == botsBiometryRow) {
                 presentFragment(new BotBiometrySettings());
+            } else if (position == serverAddressRow) {
+                AlertDialog.Builder builder = new AlertDialog.Builder(getParentActivity());
+                builder.setTitle("Адрес сервера");
+                final android.widget.EditText input = new android.widget.EditText(getParentActivity());
+                String currentAddr = ApplicationLoader.applicationContext.getSharedPreferences("server_config", Context.MODE_PRIVATE).getString("server_address", "http://127.0.0.1:8080");
+                input.setText(currentAddr);
+                builder.setView(input);
+                builder.setPositiveButton("Сохранить", (dialog, which) -> {
+                    String newAddr = input.getText().toString().trim();
+                    if (!newAddr.isEmpty()) {
+                        ServerClient.setServerBase(ApplicationLoader.applicationContext, newAddr);
+                        BulletinFactory.of(PrivacySettingsActivity.this).createSimpleBulletin(R.raw.chats_infotip, "Адрес сервера обновлен: " + newAddr).show();
+                        if (listAdapter != null) listAdapter.notifyItemChanged(serverAddressRow);
+                    }
+                });
+                builder.setNegativeButton(getString("Cancel", R.string.Cancel), null);
+                showDialog(builder.create());
+            } else if (position == registerRow) {
+                final AlertDialog progressDialog = new AlertDialog(getParentActivity(), AlertDialog.ALERT_TYPE_SPINNER);
+                progressDialog.setCanCancel(false);
+                progressDialog.show();
+                final long myId = getUserConfig().getClientUserId();
+                ServerClient.postRegister(ApplicationLoader.applicationContext, myId, new ServerClient.StringCallback() {
+                    @Override
+                    public void onSuccess(String body) {
+                        try {
+                            progressDialog.dismiss();
+                        } catch (Exception ignore) {
+                        }
+                        String hint = body != null ? body.trim() : "";
+                        java.util.regex.Matcher m = java.util.regex.Pattern.compile("ID:\\s*(\\d+)").matcher(hint);
+                        if (m.find()) {
+                            hint = "Пожалуйста, отправьте /start боту с ID: " + m.group(1);
+                        }
+                        AlertDialog.Builder builder = new AlertDialog.Builder(getParentActivity());
+                        builder.setTitle("Регистрация");
+                        builder.setMessage(hint + "\n\nПосле отправки /start боту вставьте сюда verify_secret, который пришлёт бот.");
+                        final android.widget.EditText input = new android.widget.EditText(getParentActivity());
+                        builder.setView(input);
+                        builder.setPositiveButton("Проверить", (dialog, which) -> {
+                            String secret = input.getText().toString();
+                            String pub = ApplicationLoader.applicationContext.getSharedPreferences("encryption_keys", Context.MODE_PRIVATE).getString("rsa_public", null);
+                            if (pub == null) {
+                                BulletinFactory.of(PrivacySettingsActivity.this).createSimpleBulletin(R.raw.chats_infotip, "Публичный ключ не найден").show();
+                                return;
+                            }
+                            final AlertDialog prog2 = new AlertDialog(getParentActivity(), AlertDialog.ALERT_TYPE_SPINNER);
+                            prog2.setCanCancel(false);
+                            prog2.show();
+                            ServerClient.postVerify(ApplicationLoader.applicationContext, myId, pub, secret, new ServerClient.StringCallback() {
+                                @Override
+                                public void onSuccess(String s) {
+                                    try { prog2.dismiss(); } catch (Exception ignored) {}
+                                    BulletinFactory.of(PrivacySettingsActivity.this).createSimpleBulletin(R.raw.chats_infotip, "Пользователь верифицирован").show();
+                                }
+
+                                @Override
+                                public void onError(Exception e) {
+                                    try { prog2.dismiss(); } catch (Exception ignored) {}
+                                    BulletinFactory.of(PrivacySettingsActivity.this).createSimpleBulletin(R.raw.chats_infotip, "Ошибка верификации: " + e.getMessage()).show();
+                                }
+                            });
+                        });
+                        builder.setNegativeButton(getString("Cancel", R.string.Cancel), null);
+                        showDialog(builder.create());
+                    }
+
+                    @Override
+                    public void onError(Exception e) {
+                        try {
+                            progressDialog.dismiss();
+                        } catch (Exception ignore) {}
+                        BulletinFactory.of(PrivacySettingsActivity.this).createSimpleBulletin(R.raw.chats_infotip, "Регистрация не удалась: " + e.getMessage()).show();
+                    }
+                });
             }
         });
 
@@ -703,6 +782,10 @@ public class PrivacySettingsActivity extends BaseFragment implements Notificatio
         musicRow = rowCount++;
         groupsRow = rowCount++;
         privacyShadowRow = rowCount++;
+
+        // custom registration and server address rows
+        registerRow = rowCount++;
+        serverAddressRow = rowCount++;
 
         if (getMessagesController().autoarchiveAvailable || getUserConfig().isPremium()) {
             newChatsHeaderRow = rowCount++;
@@ -979,7 +1062,7 @@ public class PrivacySettingsActivity extends BaseFragment implements Notificatio
                     position == newChatsRow && !getContactsController().getLoadingGlobalSettings() ||
                     position == emailLoginRow || position == paymentsClearRow || position == secretMapRow ||
                     position == contactsSyncRow || position == passportRow || position == contactsDeleteRow ||
-                    position == contactsSuggestRow || position == autoDeleteMesages || position == botsBiometryRow;
+                    position == contactsSuggestRow || position == autoDeleteMesages || position == botsBiometryRow || position == registerRow || position == serverAddressRow;
         }
 
         @Override
@@ -1173,6 +1256,11 @@ public class PrivacySettingsActivity extends BaseFragment implements Notificatio
                         secretMapUpdate = false;
                     } else if (position == contactsDeleteRow) {
                         textCell.setText(getString("SyncContactsDelete", R.string.SyncContactsDelete), true);
+                    } else if (position == serverAddressRow) {
+                        String addr = ApplicationLoader.applicationContext.getSharedPreferences("server_config", Context.MODE_PRIVATE).getString("server_address", "http://127.0.0.1:8080");
+                        textCell.setTextAndValue("Адрес сервера", addr, true);
+                    } else if (position == registerRow) {
+                        textCell.setText("Зарегистрироваться", true);
                     }
                     textCell.setDrawLoading(showLoading, loadingLen, animated);
                     break;

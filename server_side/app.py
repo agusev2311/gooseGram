@@ -54,14 +54,15 @@ bot = telebot.TeleBot(super_secret_config.TELEBOT_TOKEN)
 
 @bot.message_handler(commands=['start'])
 def send_welcome(message):
-    if User.query.filter_by(id=message.from_user.id).first() is None:
-        bot.reply_to(message, "You are not registered. Please register via the web interface first.")
-        return
-    user = User.query.filter_by(id=message.from_user.id).first()
-    if not user.is_verified:
-        bot.send_message(message.from_user.id, user.verify_secret)
-    else:
-        bot.send_message(message.from_user.id, "You are already verified!")
+    with app.app_context():
+        if User.query.filter_by(id=message.from_user.id).first() is None:
+            bot.reply_to(message, "You are not registered. Please register via the web interface first.")
+            return
+        user = User.query.filter_by(id=message.from_user.id).first()
+        if not user.is_verified:
+            bot.send_message(message.from_user.id, user.verify_secret)
+        else:
+            bot.send_message(message.from_user.id, "You are already verified!")
 
 def run_bot():
     bot.infinity_polling()

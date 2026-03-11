@@ -265,6 +265,7 @@
     <string name="RemindDayYearAt">\'Напомнить\' d MMM yyyy \'в\' HH:mm</string>
     <string name="EncryptionSettings">Шифрование</string>
     <string name="EncryptionServerIpHint">IP или хост сервера</string>
+    <string name="EncryptionMessageBackground">Фон зашифрованных сообщений</string>
     <string name="EncryptionServerIpEmpty">Введите IP адрес сервера</string>
     <string name="EncryptionRegister">Зарегистрироваться для шифрования</string>
     <string name="EncryptionVerify">Верифицировать шифрование</string>

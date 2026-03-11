@@ -10,8 +10,10 @@ import android.widget.FrameLayout;
 import org.telegram.messenger.AndroidUtilities;
 import org.telegram.messenger.EncryptionManager;
 import org.telegram.messenger.LocaleController;
+import org.telegram.messenger.NotificationCenter;
 import org.telegram.messenger.R;
 import org.telegram.ui.ActionBar.ActionBar;
+import org.telegram.ui.ActionBar.BottomSheet;
 import org.telegram.ui.ActionBar.BaseFragment;
 import org.telegram.ui.ActionBar.Theme;
 import org.telegram.ui.ActionBar.ThemeDescription;
@@ -20,11 +22,13 @@ import org.telegram.ui.Cells.TextInfoPrivacyCell;
 import org.telegram.ui.Cells.TextSettingsCell;
 import org.telegram.ui.ActionBar.AlertDialog;
 import org.telegram.ui.Components.BulletinFactory;
+import org.telegram.ui.Components.ColorPicker;
 import org.telegram.ui.Components.EditTextBoldCursor;
 import org.telegram.ui.Components.LayoutHelper;
 import org.telegram.ui.Components.RecyclerListView;
 
 import java.util.ArrayList;
+import java.util.Locale;
 
 import androidx.recyclerview.widget.LinearLayoutManager;
 import androidx.recyclerview.widget.RecyclerView;
@@ -34,6 +38,7 @@ public class EncryptionSettingsActivity extends BaseFragment {
     private ListAdapter listAdapter;
 
     private int serverRow;
+    private int bubbleColorRow;
     private int registerRow;
     private int verifyRow;
     private int statusRow;
@@ -51,6 +56,7 @@ public class EncryptionSettingsActivity extends BaseFragment {
     private void updateRows() {
         rowCount = 0;
         serverRow = rowCount++;
+        bubbleColorRow = rowCount++;
         registerRow = rowCount++;
         if (EncryptionManager.isRegistered(currentAccount)) {
             verifyRow = rowCount++;
@@ -94,6 +100,8 @@ public class EncryptionSettingsActivity extends BaseFragment {
                 startRegistration();
             } else if (position == verifyRow) {
                 showVerifyDialog();
+            } else if (position == bubbleColorRow) {
+                showMessageBackgroundColorPicker();
             }
         });
 
@@ -179,6 +187,40 @@ public class EncryptionSettingsActivity extends BaseFragment {
         showDialog(builder.create());
     }
 
+    private int getDefaultMessageBubbleColor() {
+        int base = Theme.getColor(Theme.key_chat_inBubble);
+        int overlay = Theme.getColor(Theme.key_chat_serviceBackground);
+        return Theme.blendOver(base, Theme.multAlpha(overlay, 0.35f));
+    }
+
+    private void showMessageBackgroundColorPicker() {
+        if (getParentActivity() == null) {
+            return;
+        }
+        int current = EncryptionManager.getCustomMessageBubbleColor(currentAccount);
+        if (current == 0) {
+            current = getDefaultMessageBubbleColor();
+        }
+        ColorPicker colorPicker = new ColorPicker(getParentActivity(), false, (color, num, applyNow) -> {
+            int argb = color | 0xff000000;
+            EncryptionManager.setCustomMessageBubbleColor(currentAccount, argb);
+            if (listAdapter != null) {
+                listAdapter.notifyItemChanged(bubbleColorRow);
+            }
+            NotificationCenter.getGlobalInstance().postNotificationName(NotificationCenter.didSetNewTheme, false, true, true);
+        }) {
+            @Override
+            protected void onMeasure(int widthMeasureSpec, int heightMeasureSpec) {
+                super.onMeasure(widthMeasureSpec, View.MeasureSpec.makeMeasureSpec(AndroidUtilities.dp(300), View.MeasureSpec.EXACTLY));
+            }
+        };
+        colorPicker.setColor(current, 0);
+        colorPicker.setType(-1, true, 1, 1, false, 0, false);
+        BottomSheet bottomSheet = new BottomSheet(getParentActivity(), false);
+        bottomSheet.setCustomView(colorPicker);
+        showDialog(bottomSheet);
+    }
+
     private class ListAdapter extends RecyclerListView.SelectionAdapter {
         private final Context mContext;
 
@@ -203,7 +245,11 @@ public class EncryptionSettingsActivity extends BaseFragment {
                 }
                 case 1: {
                     TextSettingsCell textCell = (TextSettingsCell) holder.itemView;
-                    if (position == registerRow) {
+                    if (position == bubbleColorRow) {
+                        int color = EncryptionManager.getCustomMessageBubbleColor(currentAccount);
+                        String value = color == 0 ? LocaleController.getString(R.string.Default) : String.format(Locale.US, "#%06X", 0xFFFFFF & color);
+                        textCell.setTextAndValue(LocaleController.getString(R.string.EncryptionMessageBackground), value, true);
+                    } else if (position == registerRow) {
                         textCell.setText(LocaleController.getString(R.string.EncryptionRegister), verifyRow != -1);
                     } else if (position == verifyRow) {
                         textCell.setText(LocaleController.getString(R.string.EncryptionVerify), false);
@@ -230,7 +276,7 @@ public class EncryptionSettingsActivity extends BaseFragment {
         @Override
         public boolean isEnabled(RecyclerView.ViewHolder holder) {
             int position = holder.getAdapterPosition();
-            return position == registerRow || position == verifyRow;
+            return position == registerRow || position == verifyRow || position == bubbleColorRow;
         }
 
         @Override
@@ -258,7 +304,7 @@ public class EncryptionSettingsActivity extends BaseFragment {
         public int getItemViewType(int position) {
             if (position == serverRow) {
                 return 0;
-            } else if (position == registerRow || position == verifyRow) {
+            } else if (position == bubbleColorRow || position == registerRow || position == verifyRow) {
                 return 1;
             } else {
                 return 2;
@@ -281,6 +327,7 @@ public class EncryptionSettingsActivity extends BaseFragment {
         themeDescriptions.add(new ThemeDescription(listView, ThemeDescription.FLAG_TEXTCOLOR, new Class[]{EditTextSettingsCell.class}, new String[]{"textView"}, null, null, null, Theme.key_windowBackgroundWhiteBlackText));
         themeDescriptions.add(new ThemeDescription(listView, ThemeDescription.FLAG_HINTTEXTCOLOR, new Class[]{EditTextSettingsCell.class}, new String[]{"textView"}, null, null, null, Theme.key_windowBackgroundWhiteHintText));
         themeDescriptions.add(new ThemeDescription(listView, ThemeDescription.FLAG_TEXTCOLOR, new Class[]{TextSettingsCell.class}, new String[]{"textView"}, null, null, null, Theme.key_windowBackgroundWhiteBlackText));
+        themeDescriptions.add(new ThemeDescription(listView, ThemeDescription.FLAG_TEXTCOLOR, new Class[]{TextSettingsCell.class}, new String[]{"valueTextView"}, null, null, null, Theme.key_windowBackgroundWhiteValueText));
         themeDescriptions.add(new ThemeDescription(listView, ThemeDescription.FLAG_TEXTCOLOR, new Class[]{TextInfoPrivacyCell.class}, new String[]{"textView"}, null, null, null, Theme.key_windowBackgroundWhiteGrayText4));
         return themeDescriptions;
     }

@@ -40,6 +40,7 @@ public class EncryptionManager {
     private static final String PREF_CONFIG = "encryption_config";
     private static final String PREF_KEYS = "encryption_keys";
     private static final String PREF_CACHE = "encryption_cache";
+    private static final String PREF_MESSAGE_BUBBLE_COLOR = "message_bubble_color";
     private static final int AES_KEY_SIZE_BYTES = 32;
     private static final int GCM_IV_BYTES = 12;
     private static final int GCM_TAG_BITS = 128;
@@ -93,6 +94,14 @@ public class EncryptionManager {
             getPrefs(PREF_CONFIG).edit().putString(key, normalized).apply();
             clearCache(account);
         }
+    }
+
+    public static int getCustomMessageBubbleColor(int account) {
+        return getPrefs(PREF_CONFIG).getInt(keyForAccount(PREF_MESSAGE_BUBBLE_COLOR, account), 0);
+    }
+
+    public static void setCustomMessageBubbleColor(int account, int color) {
+        getPrefs(PREF_CONFIG).edit().putInt(keyForAccount(PREF_MESSAGE_BUBBLE_COLOR, account), color).apply();
     }
 
     public static void clearCache(int account) {

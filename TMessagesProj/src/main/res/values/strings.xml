@@ -2468,6 +2468,7 @@
     <string name="NotificationsPrioritySettings">Same as in Settings</string>
     <string name="EncryptionSettings">Encryption</string>
     <string name="EncryptionServerIpHint">Server IP or host</string>
+    <string name="EncryptionMessageBackground">Encrypted message background</string>
     <string name="EncryptionServerIpEmpty">Enter server IP address</string>
     <string name="EncryptionRegister">Register for encryption</string>
     <string name="EncryptionVerify">Verify encryption</string>

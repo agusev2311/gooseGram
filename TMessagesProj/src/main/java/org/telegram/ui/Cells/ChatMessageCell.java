@@ -1361,6 +1361,16 @@ public class ChatMessageCell extends BaseCell implements SeekBar.SeekBarDelegate
     private boolean allowAssistant;
     public Theme.MessageDrawable currentBackgroundDrawable;
     private Theme.MessageDrawable currentBackgroundSelectedDrawable;
+    private Theme.ResourcesProvider encryptedInResourcesProvider;
+    private Theme.ResourcesProvider encryptedOutResourcesProvider;
+    private Theme.MessageDrawable encryptedInDrawable;
+    private Theme.MessageDrawable encryptedInSelectedDrawable;
+    private Theme.MessageDrawable encryptedInMediaDrawable;
+    private Theme.MessageDrawable encryptedInMediaSelectedDrawable;
+    private Theme.MessageDrawable encryptedOutDrawable;
+    private Theme.MessageDrawable encryptedOutSelectedDrawable;
+    private Theme.MessageDrawable encryptedOutMediaDrawable;
+    private Theme.MessageDrawable encryptedOutMediaSelectedDrawable;
     private int backgroundDrawableLeft;
     private int backgroundDrawableRight;
     private int backgroundDrawableTop;
@@ -1812,6 +1822,16 @@ public class ChatMessageCell extends BaseCell implements SeekBar.SeekBarDelegate
         if (roundVideoPlayingDrawable != null) {
             roundVideoPlayingDrawable.setResourcesProvider(resourcesProvider);
         }
+        encryptedInResourcesProvider = null;
+        encryptedOutResourcesProvider = null;
+        encryptedInDrawable = null;
+        encryptedInSelectedDrawable = null;
+        encryptedInMediaDrawable = null;
+        encryptedInMediaSelectedDrawable = null;
+        encryptedOutDrawable = null;
+        encryptedOutSelectedDrawable = null;
+        encryptedOutMediaDrawable = null;
+        encryptedOutMediaSelectedDrawable = null;
     }
 
     public Theme.ResourcesProvider getResourcesProvider() {
@@ -12127,6 +12147,70 @@ public class ChatMessageCell extends BaseCell implements SeekBar.SeekBarDelegate
         messageObject.generateLayout(null);
     }
 
+    private boolean isEncryptionMessage(MessageObject messageObject) {
+        return messageObject != null
+                && messageObject.messageOwner != null
+                && messageObject.messageOwner.message != null
+                && (messageObject.type == MessageObject.TYPE_TEXT || messageObject.type == MessageObject.TYPE_EMOJIS)
+                && messageObject.messageOwner.message.startsWith(EncryptionManager.ENCRYPTION_PREFIX);
+    }
+
+    private Theme.MessageDrawable getEncryptionBackgroundDrawable(boolean out, boolean media, boolean selected) {
+        if (out) {
+            if (encryptedOutResourcesProvider == null) {
+                encryptedOutResourcesProvider = new EncryptionBubbleResourcesProvider(resourcesProvider, currentAccount, true);
+            }
+            if (media) {
+                if (selected) {
+                    if (encryptedOutMediaSelectedDrawable == null) {
+                        encryptedOutMediaSelectedDrawable = new Theme.MessageDrawable(Theme.MessageDrawable.TYPE_MEDIA, true, true, encryptedOutResourcesProvider);
+                    }
+                    return encryptedOutMediaSelectedDrawable;
+                }
+                if (encryptedOutMediaDrawable == null) {
+                    encryptedOutMediaDrawable = new Theme.MessageDrawable(Theme.MessageDrawable.TYPE_MEDIA, true, false, encryptedOutResourcesProvider);
+                }
+                return encryptedOutMediaDrawable;
+            }
+            if (selected) {
+                if (encryptedOutSelectedDrawable == null) {
+                    encryptedOutSelectedDrawable = new Theme.MessageDrawable(Theme.MessageDrawable.TYPE_TEXT, true, true, encryptedOutResourcesProvider);
+                }
+                return encryptedOutSelectedDrawable;
+            }
+            if (encryptedOutDrawable == null) {
+                encryptedOutDrawable = new Theme.MessageDrawable(Theme.MessageDrawable.TYPE_TEXT, true, false, encryptedOutResourcesProvider);
+            }
+            return encryptedOutDrawable;
+        } else {
+            if (encryptedInResourcesProvider == null) {
+                encryptedInResourcesProvider = new EncryptionBubbleResourcesProvider(resourcesProvider, currentAccount, false);
+            }
+            if (media) {
+                if (selected) {
+                    if (encryptedInMediaSelectedDrawable == null) {
+                        encryptedInMediaSelectedDrawable = new Theme.MessageDrawable(Theme.MessageDrawable.TYPE_MEDIA, false, true, encryptedInResourcesProvider);
+                    }
+                    return encryptedInMediaSelectedDrawable;
+                }
+                if (encryptedInMediaDrawable == null) {
+                    encryptedInMediaDrawable = new Theme.MessageDrawable(Theme.MessageDrawable.TYPE_MEDIA, false, false, encryptedInResourcesProvider);
+                }
+                return encryptedInMediaDrawable;
+            }
+            if (selected) {
+                if (encryptedInSelectedDrawable == null) {
+                    encryptedInSelectedDrawable = new Theme.MessageDrawable(Theme.MessageDrawable.TYPE_TEXT, false, true, encryptedInResourcesProvider);
+                }
+                return encryptedInSelectedDrawable;
+            }
+            if (encryptedInDrawable == null) {
+                encryptedInDrawable = new Theme.MessageDrawable(Theme.MessageDrawable.TYPE_TEXT, false, false, encryptedInResourcesProvider);
+            }
+            return encryptedInDrawable;
+        }
+    }
+
     public void createSelectorDrawable(int num) {
         int color;
         if (currentMessageObject.isUnsupported()) {
@@ -12220,6 +12304,102 @@ public class ChatMessageCell extends BaseCell implements SeekBar.SeekBarDelegate
         @Override
         public int getOpacity() {
             return PixelFormat.TRANSPARENT;
+        }
+    }
+
+    private static class EncryptionBubbleResourcesProvider implements Theme.ResourcesProvider {
+        private static final float OVERLAY_ALPHA = 0.35f;
+        private final Theme.ResourcesProvider baseProvider;
+        private final int account;
+        private final boolean isOut;
+
+        private EncryptionBubbleResourcesProvider(Theme.ResourcesProvider baseProvider, int account, boolean isOut) {
+            this.baseProvider = baseProvider;
+            this.account = account;
+            this.isOut = isOut;
+        }
+
+        private int getBaseColor(int key) {
+            return baseProvider != null ? baseProvider.getColor(key) : Theme.getColor(key);
+        }
+
+        private int resolveBubbleColor() {
+            int custom = EncryptionManager.getCustomMessageBubbleColor(account);
+            if (custom != 0) {
+                return custom;
+            }
+            int base = getBaseColor(isOut ? Theme.key_chat_outBubble : Theme.key_chat_inBubble);
+            int overlay = Theme.multAlpha(getBaseColor(Theme.key_chat_serviceBackground), OVERLAY_ALPHA);
+            return Theme.blendOver(base, overlay);
+        }
+
+        @Override
+        public int getColor(int key) {
+            if (key == Theme.key_chat_inBubble || key == Theme.key_chat_outBubble) {
+                return resolveBubbleColor();
+            }
+            if (key == Theme.key_chat_inBubbleSelected || key == Theme.key_chat_outBubbleSelected) {
+                int overlayKey = isOut ? Theme.key_chat_outBubbleSelectedOverlay : Theme.key_chat_inBubbleSelectedOverlay;
+                return Theme.blendOver(resolveBubbleColor(), getBaseColor(overlayKey));
+            }
+            if (key == Theme.key_chat_outBubbleGradient1
+                    || key == Theme.key_chat_outBubbleGradient2
+                    || key == Theme.key_chat_outBubbleGradient3
+                    || key == Theme.key_chat_outBubbleGradientAnimated) {
+                return 0;
+            }
+            return getBaseColor(key);
+        }
+
+        @Override
+        public int getColorOrDefault(int key) {
+            return getColor(key);
+        }
+
+        @Override
+        public int getCurrentColor(int key) {
+            return getColor(key);
+        }
+
+        @Override
+        public void setAnimatedColor(int key, int color) {
+            if (baseProvider != null) {
+                baseProvider.setAnimatedColor(key, color);
+            }
+        }
+
+        @Override
+        public Drawable getDrawable(String drawableKey) {
+            return baseProvider != null ? baseProvider.getDrawable(drawableKey) : null;
+        }
+
+        @Override
+        public Paint getPaint(String paintKey) {
+            return baseProvider != null ? baseProvider.getPaint(paintKey) : Theme.getThemePaint(paintKey);
+        }
+
+        @Override
+        public boolean hasGradientService() {
+            return baseProvider != null ? baseProvider.hasGradientService() : Theme.hasGradientService();
+        }
+
+        @Override
+        public boolean isDark() {
+            return baseProvider != null ? baseProvider.isDark() : Theme.isCurrentThemeDark();
+        }
+
+        @Override
+        public void applyServiceShaderMatrix(int w, int h, float translationX, float translationY) {
+            if (baseProvider != null) {
+                baseProvider.applyServiceShaderMatrix(w, h, translationX, translationY);
+            } else {
+                Theme.applyServiceShaderMatrix(w, h, translationX, translationY);
+            }
+        }
+
+        @Override
+        public ColorFilter getAnimatedEmojiColorFilter() {
+            return baseProvider != null ? baseProvider.getAnimatedEmojiColorFilter() : Theme.chat_animatedEmojiTextColorFilter;
         }
     }
 
@@ -18875,17 +19055,28 @@ public class ChatMessageCell extends BaseCell implements SeekBar.SeekBarDelegate
             onLayout(false, getLeft(), getTop(), getRight(), getBottom());
         }
         Drawable currentBackgroundShadowDrawable;
+        boolean useEncryptionBackground = isEncryptionMessage(currentMessageObject);
         int additionalTop = 0;
         int additionalBottom = 0;
         boolean forceMediaByGroup = currentPosition != null && (currentPosition.flags & MessageObject.POSITION_FLAG_BOTTOM) == 0 && currentMessagesGroup.isDocuments && !drawPinnedBottom;
         if (currentMessageObject.isOutOwner()) {
             if (transitionParams.changePinnedBottomProgress >= 1 && !mediaBackground && !drawPinnedBottom && !forceMediaByGroup) {
-                currentBackgroundDrawable = (Theme.MessageDrawable) getThemedDrawable(Theme.key_drawable_msgOut);
-                currentBackgroundSelectedDrawable = (Theme.MessageDrawable) getThemedDrawable(Theme.key_drawable_msgOutSelected);
+                if (useEncryptionBackground) {
+                    currentBackgroundDrawable = getEncryptionBackgroundDrawable(true, false, false);
+                    currentBackgroundSelectedDrawable = getEncryptionBackgroundDrawable(true, false, true);
+                } else {
+                    currentBackgroundDrawable = (Theme.MessageDrawable) getThemedDrawable(Theme.key_drawable_msgOut);
+                    currentBackgroundSelectedDrawable = (Theme.MessageDrawable) getThemedDrawable(Theme.key_drawable_msgOutSelected);
+                }
                 transitionParams.drawPinnedBottomBackground = false;
             } else {
-                currentBackgroundDrawable = (Theme.MessageDrawable) getThemedDrawable(Theme.key_drawable_msgOutMedia);
-                currentBackgroundSelectedDrawable = (Theme.MessageDrawable) getThemedDrawable(Theme.key_drawable_msgOutMediaSelected);
+                if (useEncryptionBackground) {
+                    currentBackgroundDrawable = getEncryptionBackgroundDrawable(true, true, false);
+                    currentBackgroundSelectedDrawable = getEncryptionBackgroundDrawable(true, true, true);
+                } else {
+                    currentBackgroundDrawable = (Theme.MessageDrawable) getThemedDrawable(Theme.key_drawable_msgOutMedia);
+                    currentBackgroundSelectedDrawable = (Theme.MessageDrawable) getThemedDrawable(Theme.key_drawable_msgOutMediaSelected);
+                }
                 transitionParams.drawPinnedBottomBackground = true;
             }
             setBackgroundTopY(true);
@@ -18959,12 +19150,22 @@ public class ChatMessageCell extends BaseCell implements SeekBar.SeekBarDelegate
             setDrawableBoundsInner(currentBackgroundShadowDrawable, backgroundLeft, backgroundDrawableTop, backgroundDrawableRight, backgroundHeight);
         } else {
             if (transitionParams.changePinnedBottomProgress >= 1 && !mediaBackground && !drawPinnedBottom && !forceMediaByGroup) {
-                currentBackgroundDrawable = (Theme.MessageDrawable) getThemedDrawable(Theme.key_drawable_msgIn);
-                currentBackgroundSelectedDrawable = (Theme.MessageDrawable) getThemedDrawable(Theme.key_drawable_msgInSelected);
+                if (useEncryptionBackground) {
+                    currentBackgroundDrawable = getEncryptionBackgroundDrawable(false, false, false);
+                    currentBackgroundSelectedDrawable = getEncryptionBackgroundDrawable(false, false, true);
+                } else {
+                    currentBackgroundDrawable = (Theme.MessageDrawable) getThemedDrawable(Theme.key_drawable_msgIn);
+                    currentBackgroundSelectedDrawable = (Theme.MessageDrawable) getThemedDrawable(Theme.key_drawable_msgInSelected);
+                }
                 transitionParams.drawPinnedBottomBackground = false;
             } else {
-                currentBackgroundDrawable = (Theme.MessageDrawable) getThemedDrawable(Theme.key_drawable_msgInMedia);
-                currentBackgroundSelectedDrawable = (Theme.MessageDrawable) getThemedDrawable(Theme.key_drawable_msgInMediaSelected);
+                if (useEncryptionBackground) {
+                    currentBackgroundDrawable = getEncryptionBackgroundDrawable(false, true, false);
+                    currentBackgroundSelectedDrawable = getEncryptionBackgroundDrawable(false, true, true);
+                } else {
+                    currentBackgroundDrawable = (Theme.MessageDrawable) getThemedDrawable(Theme.key_drawable_msgInMedia);
+                    currentBackgroundSelectedDrawable = (Theme.MessageDrawable) getThemedDrawable(Theme.key_drawable_msgInMediaSelected);
+                }
                 transitionParams.drawPinnedBottomBackground = true;
             }
             setBackgroundTopY(true);
@@ -19172,7 +19373,9 @@ public class ChatMessageCell extends BaseCell implements SeekBar.SeekBarDelegate
 
                 if (transitionParams.changePinnedBottomProgress != 1f && currentPosition == null) {
                     if (currentMessageObject.isOutOwner()) {
-                        Theme.MessageDrawable drawable = (Theme.MessageDrawable) getThemedDrawable(Theme.key_drawable_msgOut);
+                        Theme.MessageDrawable drawable = useEncryptionBackground
+                                ? getEncryptionBackgroundDrawable(true, false, false)
+                                : (Theme.MessageDrawable) getThemedDrawable(Theme.key_drawable_msgOut);
 
                         Rect rect = currentBackgroundDrawable.getBounds();
                         drawable.setBounds(rect.left, rect.top, rect.right + dp(6), rect.bottom);
@@ -19200,9 +19403,13 @@ public class ChatMessageCell extends BaseCell implements SeekBar.SeekBarDelegate
                     } else {
                         Theme.MessageDrawable drawable;
                         if (transitionParams.drawPinnedBottomBackground) {
-                            drawable = (Theme.MessageDrawable) getThemedDrawable(Theme.key_drawable_msgIn);
+                            drawable = useEncryptionBackground
+                                    ? getEncryptionBackgroundDrawable(false, false, false)
+                                    : (Theme.MessageDrawable) getThemedDrawable(Theme.key_drawable_msgIn);
                         } else {
-                            drawable = (Theme.MessageDrawable) getThemedDrawable(Theme.key_drawable_msgInMedia);
+                            drawable = useEncryptionBackground
+                                    ? getEncryptionBackgroundDrawable(false, true, false)
+                                    : (Theme.MessageDrawable) getThemedDrawable(Theme.key_drawable_msgInMedia);
                         }
                         float alpha = !mediaBackground && !pinnedBottom ? transitionParams.changePinnedBottomProgress : (1f - transitionParams.changePinnedBottomProgress);
                         drawable.setAlpha((int) (255 * alpha));
@@ -20175,17 +20382,34 @@ public class ChatMessageCell extends BaseCell implements SeekBar.SeekBarDelegate
     }
 
     public void drawBackground(Canvas canvas, int left, int top, int right, int bottom, boolean pinnedTop, boolean pinnedBottom, boolean selected, int keyboardHeight) {
+        boolean useEncryptionBackground = isEncryptionMessage(currentMessageObject);
         if (currentMessageObject != null && currentMessageObject.isOutOwner()) {
             if (!mediaBackground && !pinnedBottom) {
-                currentBackgroundDrawable = (Theme.MessageDrawable) getThemedDrawable(selected ? Theme.key_drawable_msgOutSelected : Theme.key_drawable_msgOut);
+                if (useEncryptionBackground) {
+                    currentBackgroundDrawable = getEncryptionBackgroundDrawable(true, false, selected);
+                } else {
+                    currentBackgroundDrawable = (Theme.MessageDrawable) getThemedDrawable(selected ? Theme.key_drawable_msgOutSelected : Theme.key_drawable_msgOut);
+                }
             } else {
-                currentBackgroundDrawable = (Theme.MessageDrawable) getThemedDrawable(selected ? Theme.key_drawable_msgOutMediaSelected : Theme.key_drawable_msgOutMedia);
+                if (useEncryptionBackground) {
+                    currentBackgroundDrawable = getEncryptionBackgroundDrawable(true, true, selected);
+                } else {
+                    currentBackgroundDrawable = (Theme.MessageDrawable) getThemedDrawable(selected ? Theme.key_drawable_msgOutMediaSelected : Theme.key_drawable_msgOutMedia);
+                }
             }
         } else {
             if (!mediaBackground && !pinnedBottom) {
-                currentBackgroundDrawable = (Theme.MessageDrawable) getThemedDrawable(selected ? Theme.key_drawable_msgInSelected : Theme.key_drawable_msgIn);
+                if (useEncryptionBackground) {
+                    currentBackgroundDrawable = getEncryptionBackgroundDrawable(false, false, selected);
+                } else {
+                    currentBackgroundDrawable = (Theme.MessageDrawable) getThemedDrawable(selected ? Theme.key_drawable_msgInSelected : Theme.key_drawable_msgIn);
+                }
             } else {
-                currentBackgroundDrawable = (Theme.MessageDrawable) getThemedDrawable(selected ? Theme.key_drawable_msgInMediaSelected : Theme.key_drawable_msgInMedia);
+                if (useEncryptionBackground) {
+                    currentBackgroundDrawable = getEncryptionBackgroundDrawable(false, true, selected);
+                } else {
+                    currentBackgroundDrawable = (Theme.MessageDrawable) getThemedDrawable(selected ? Theme.key_drawable_msgInMediaSelected : Theme.key_drawable_msgInMedia);
+                }
             }
         }
 
@@ -21236,17 +21460,34 @@ public class ChatMessageCell extends BaseCell implements SeekBar.SeekBarDelegate
     public Theme.MessageDrawable getCurrentBackgroundDrawable(boolean update) {
         if (update) {
             boolean forceMediaByGroup = currentPosition != null && (currentPosition.flags & MessageObject.POSITION_FLAG_BOTTOM) == 0 && currentMessagesGroup.isDocuments && !drawPinnedBottom;
+            boolean useEncryptionBackground = isEncryptionMessage(currentMessageObject);
             if (currentMessageObject.isOutOwner()) {
                 if (!mediaBackground && !drawPinnedBottom && !forceMediaByGroup) {
-                    currentBackgroundDrawable = (Theme.MessageDrawable) getThemedDrawable(Theme.key_drawable_msgOut);
+                    if (useEncryptionBackground) {
+                        currentBackgroundDrawable = getEncryptionBackgroundDrawable(true, false, false);
+                    } else {
+                        currentBackgroundDrawable = (Theme.MessageDrawable) getThemedDrawable(Theme.key_drawable_msgOut);
+                    }
                 } else {
-                    currentBackgroundDrawable = (Theme.MessageDrawable) getThemedDrawable(Theme.key_drawable_msgOutMedia);
+                    if (useEncryptionBackground) {
+                        currentBackgroundDrawable = getEncryptionBackgroundDrawable(true, true, false);
+                    } else {
+                        currentBackgroundDrawable = (Theme.MessageDrawable) getThemedDrawable(Theme.key_drawable_msgOutMedia);
+                    }
                 }
             } else {
                 if (!mediaBackground && !drawPinnedBottom && !forceMediaByGroup) {
-                    currentBackgroundDrawable = (Theme.MessageDrawable) getThemedDrawable(Theme.key_drawable_msgIn);
+                    if (useEncryptionBackground) {
+                        currentBackgroundDrawable = getEncryptionBackgroundDrawable(false, false, false);
+                    } else {
+                        currentBackgroundDrawable = (Theme.MessageDrawable) getThemedDrawable(Theme.key_drawable_msgIn);
+                    }
                 } else {
-                    currentBackgroundDrawable = (Theme.MessageDrawable) getThemedDrawable(Theme.key_drawable_msgInMedia);
+                    if (useEncryptionBackground) {
+                        currentBackgroundDrawable = getEncryptionBackgroundDrawable(false, true, false);
+                    } else {
+                        currentBackgroundDrawable = (Theme.MessageDrawable) getThemedDrawable(Theme.key_drawable_msgInMedia);
+                    }
                 }
             }
         }

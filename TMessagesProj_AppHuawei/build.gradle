@@ -49,16 +49,21 @@ android {
         coreLibraryDesugaringEnabled true
     }
 
+    def releaseKeystore = file("../TMessagesProj/config/release.keystore")
+    if (!releaseKeystore.exists()) {
+        releaseKeystore = file("../TMessagesProj/config/release.keystore.jks")
+    }
+
     signingConfigs {
         debug {
-            storeFile file("../TMessagesProj/config/release.keystore")
+            storeFile releaseKeystore
             storePassword RELEASE_STORE_PASSWORD
             keyAlias RELEASE_KEY_ALIAS
             keyPassword RELEASE_KEY_PASSWORD
         }
 
         release {
-            storeFile file("../TMessagesProj/config/release.keystore")
+            storeFile releaseKeystore
             storePassword RELEASE_STORE_PASSWORD
             keyAlias RELEASE_KEY_ALIAS
             keyPassword RELEASE_KEY_PASSWORD

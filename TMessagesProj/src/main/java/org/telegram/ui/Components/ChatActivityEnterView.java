@@ -3386,7 +3386,11 @@ public class ChatActivityEnterView extends FrameLayout implements
         if (messageEditText != null && !TextUtils.isEmpty(messageEditText.getText())) {
             String textFinal = SendMessagesHelper.getTrimmedString(messageEditText.getText().toString());
             if (textFinal.length() != 0) {
-                count += (int) Math.ceil(textFinal.length() / 4096.0f);
+                if (!DialogObject.isEncryptedDialog(dialog_id) && DialogObject.isUserDialog(dialog_id)) {
+                    count++;
+                } else {
+                    count += (int) Math.ceil(textFinal.length() / 4096.0f);
+                }
             } else {
                 count++;
             }
@@ -7211,6 +7215,9 @@ public class ChatActivityEnterView extends FrameLayout implements
         }
         boolean supportsNewEntities = supportsSendingNewEntities();
         int maxLength = accountInstance.getMessagesController().maxMessageLength;
+        if (!DialogObject.isEncryptedDialog(dialog_id) && DialogObject.isUserDialog(dialog_id)) {
+            maxLength = Math.max(maxLength, text.length());
+        }
         if (text.length() != 0) {
             if (delegate != null && parentFragment != null && (scheduleDate != 0) == parentFragment.isInScheduleMode()) {
                 delegate.prepareMessageSending();

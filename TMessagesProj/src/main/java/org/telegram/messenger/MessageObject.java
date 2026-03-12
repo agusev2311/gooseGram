@@ -957,6 +957,7 @@ public class MessageObject {
         public boolean code;
         public boolean quote;
         public boolean quoteCollapse;
+        public boolean textCollapse;
 
         public String language;
         public Text languageLayout;
@@ -971,15 +972,15 @@ public class MessageObject {
         public Paint copySeparator;
 
         public int heightCollapsed() {
-            return quoteCollapse ? collapsedHeight : height;
+            return (quoteCollapse || textCollapse) ? collapsedHeight : height;
         }
 
         public int height() {
-            return quoteCollapse && collapsed() ? collapsedHeight : height;
+            return (quoteCollapse || textCollapse) && collapsed() ? collapsedHeight : height;
         }
 
         public int height(ChatMessageCell.TransitionParams tp) {
-            if (!quoteCollapse)
+            if (!quoteCollapse && !textCollapse)
                 return height;
             return AndroidUtilities.lerp(height, collapsedHeight, collapsed(tp));
         }
@@ -991,6 +992,10 @@ public class MessageObject {
 
         public boolean collapsed() {
             return messageObject == null || messageObject.expandedQuotes == null || !messageObject.expandedQuotes.contains(index);
+        }
+
+        public boolean isCollapsible() {
+            return quoteCollapse || textCollapse;
         }
 
         public float textYOffset(ArrayList<TextLayoutBlock> blocks) {
@@ -1761,6 +1766,8 @@ public class MessageObject {
 
     private static final int LINES_PER_BLOCK = 10;
     private static final int LINES_PER_BLOCK_WITH_EMOJI = 5;
+    private static final int COLLAPSIBLE_TEXT_VISIBLE_LINES = 8;
+    private static final int COLLAPSIBLE_TEXT_MIN_LINES = 12;
 
     public int lastLineWidth;
     public int textWidth;
@@ -5702,13 +5709,13 @@ public class MessageObject {
 
     private void applyEncryptionDisplay() {
         encryptionStatusLine = null;
-        if (messageOwner == null || messageOwner.message == null) {
+        if (messageOwner == null) {
             return;
         }
         if (type != TYPE_TEXT && type != TYPE_EMOJIS) {
             return;
         }
-        EncryptionManager.DisplayResult result = EncryptionManager.getDisplayText(currentAccount, getFromChatId(), messageOwner.message);
+        EncryptionManager.DisplayResult result = EncryptionManager.getDisplayText(currentAccount, messageOwner, getFromChatId());
         if (result != null) {
             if (!TextUtils.isEmpty(result.statusLine)) {
                 StringBuilder builder = new StringBuilder();
@@ -6021,7 +6028,9 @@ public class MessageObject {
             } else if (getMedia(messageOwner) instanceof TLRPC.TL_messageMediaDocument) {
                 TLRPC.Document document = getDocument();
                 if (document != null && document.mime_type != null) {
-                    if (isGifDocument(document, hasValidGroupId())) {
+                    if (EncryptionManager.isEncryptedTextDocument(messageOwner)) {
+                        type = TYPE_TEXT;
+                    } else if (isGifDocument(document, hasValidGroupId())) {
                         type = TYPE_GIF;
                     } else if (isSticker()) {
                         type = TYPE_STICKER;
@@ -6887,6 +6896,11 @@ public class MessageObject {
             entities = messageOwner.translatedText.entities;
         }
         if (!isMediaEmpty() && !(getMedia(messageOwner) instanceof TLRPC.TL_messageMediaGame) && !TextUtils.isEmpty(text)) {
+            EncryptionManager.DisplayResult encryptionDisplay = EncryptionManager.getDisplayText(currentAccount, getFromChatId(), text);
+            if (encryptionDisplay != null && encryptionDisplay.encrypted) {
+                text = encryptionDisplay.displayText;
+                entities = new ArrayList<>();
+            }
             caption = Emoji.replaceEmoji(text, Theme.chat_msgTextPaint.getFontMetricsInt(), false);
             caption = replaceAnimatedEmoji(caption, entities, Theme.chat_msgTextPaint.getFontMetricsInt(), false);
 
@@ -7956,9 +7970,15 @@ public class MessageObject {
 //        textHeight = 0;
         int linesCount = textLayout.getLineCount();
         int linesPreBlock = totalAnimatedEmojiCount >= 50 ? LINES_PER_BLOCK_WITH_EMOJI : LINES_PER_BLOCK;
+        boolean collapseLongText = type == TYPE_TEXT
+                && !isRepostPreview
+                && !hasQuote
+                && !hasCode
+                && emojiOnlyCount == 0
+                && linesCount > COLLAPSIBLE_TEXT_MIN_LINES;
 
         int blocksCount;
-        boolean singleLayout = Build.VERSION.SDK_INT >= Build.VERSION_CODES.N && totalAnimatedEmojiCount < 50;
+        boolean singleLayout = Build.VERSION.SDK_INT >= Build.VERSION_CODES.N && totalAnimatedEmojiCount < 50 || collapseLongText;
         if (singleLayout) {
             blocksCount = 1;
         } else {
@@ -8119,6 +8139,15 @@ public class MessageObject {
                 } catch (Exception e) {
                     FileLog.e(e);
                     continue;
+                }
+            }
+
+            if (collapseLongText && block.first && block.last && block.textLayout != null && block.textLayout.getLineCount() > COLLAPSIBLE_TEXT_VISIBLE_LINES) {
+                block.textCollapse = true;
+                block.messageObject = this;
+                block.collapsedHeight = Math.min(block.height, block.textLayout.getLineBottom(COLLAPSIBLE_TEXT_VISIBLE_LINES - 1) + dp(10));
+                if (block.collapsedHeight >= block.height) {
+                    block.textCollapse = false;
                 }
             }
 
@@ -9974,7 +10003,7 @@ public class MessageObject {
             return dp(72);
         } else if (type == TYPE_CONTACT) {
             return dp(71);
-        } else if (type == TYPE_FILE) {
+        } else if (type == TYPE_FILE && !EncryptionManager.isEncryptedImageDocument(messageOwner)) {
             return dp(100);
         } else if (type == TYPE_GEO) {
             return dp(114);

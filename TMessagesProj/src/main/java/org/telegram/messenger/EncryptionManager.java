@@ -8,9 +8,17 @@ import android.widget.Toast;
 
 import org.json.JSONException;
 import org.json.JSONObject;
+import org.telegram.tgnet.TLRPC;
 
 
+import java.io.BufferedInputStream;
+import java.io.BufferedOutputStream;
 import java.io.BufferedReader;
+import java.io.DataInputStream;
+import java.io.DataOutputStream;
+import java.io.File;
+import java.io.FileInputStream;
+import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.InputStreamReader;
@@ -31,11 +39,17 @@ import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 
 import javax.crypto.Cipher;
+import javax.crypto.CipherInputStream;
+import javax.crypto.CipherOutputStream;
 import javax.crypto.spec.GCMParameterSpec;
 import javax.crypto.spec.SecretKeySpec;
 
 public class EncryptionManager {
     public static final String ENCRYPTION_PREFIX = "[ENCRYPTED] ";
+    public static final String ENCRYPTED_TEXT_DOCUMENT_MIME = "application/x-goosegram-encrypted-text";
+    public static final String PARAM_UPLOAD_PATH = "enc_upload_path";
+    public static final String PARAM_PREVIEW_TEXT = "enc_preview_text";
+    public static final String ENCRYPTED_IMAGE_NAME_PREFIX = "ggenc_photo_";
 
     private static final String PREF_CONFIG = "encryption_config";
     private static final String PREF_KEYS = "encryption_keys";
@@ -45,6 +59,10 @@ public class EncryptionManager {
     private static final int GCM_IV_BYTES = 12;
     private static final int GCM_TAG_BITS = 128;
     private static final int NETWORK_TIMEOUT_MS = 10000;
+    private static final int TELEGRAM_TEXT_LIMIT = 4096;
+    private static final int FILE_BUFFER_SIZE = 32 * 1024;
+    private static final int FILE_HEADER_LIMIT = 32 * 1024;
+    private static final byte[] ENCRYPTED_FILE_MAGIC = new byte[]{'G', 'G', 'E', '1'};
 
     private static final Map<String, String> publicKeyCache = new ConcurrentHashMap<>();
 
@@ -93,6 +111,18 @@ public class EncryptionManager {
         if (!TextUtils.equals(current, normalized)) {
             getPrefs(PREF_CONFIG).edit().putString(key, normalized).apply();
             clearCache(account);
+        }
+    }
+
+    public static class OutgoingTextResult {
+        public final String encryptedText;
+        public final File previewFile;
+        public final File uploadFile;
+
+        public OutgoingTextResult(String encryptedText, File previewFile, File uploadFile) {
+            this.encryptedText = encryptedText;
+            this.previewFile = previewFile;
+            this.uploadFile = uploadFile;
         }
     }
 
@@ -207,32 +237,51 @@ public class EncryptionManager {
                 respond(callback, message, null);
                 return;
             }
-            if (!DialogObject.isUserDialog(peerUserId)) {
-                respond(callback, null, "Peer is not a user dialog");
-                return;
-            }
-            String server = getServerAddress(account);
-            if (TextUtils.isEmpty(server)) {
-                respond(callback, null, "Server address is empty");
-                return;
-            }
-            if (!isVerified(account)) {
-                respond(callback, null, "User is not verified");
-                return;
-            }
             try {
-                KeyBundle keys = ensureKeys(account);
-                PublicKeyInfo peerKey = getPublicKey(account, peerUserId);
-                if (peerKey == null) {
-                    respond(callback, null, "User not registered or not verified");
-                    return;
-                }
-                String encrypted = encryptPayload(keys, peerKey, message, UserConfig.getInstance(account).getClientUserId());
+                String encrypted = encryptOutgoingTextBlocking(account, peerUserId, message);
                 respond(callback, encrypted, null);
             } catch (Exception e) {
                 respond(callback, null, e.getMessage());
             }
         });
+    }
+
+    public static void encryptOutgoingTextOrFile(int account, long peerUserId, String message, SimpleCallback<OutgoingTextResult> callback) {
+        Utilities.globalQueue.postRunnable(() -> {
+            if (TextUtils.isEmpty(message)) {
+                respond(callback, null, "Message is empty");
+                return;
+            }
+            try {
+                String encrypted = encryptOutgoingTextBlocking(account, peerUserId, message);
+                if (encrypted.length() <= TELEGRAM_TEXT_LIMIT) {
+                    respond(callback, new OutgoingTextResult(encrypted, null, null), null);
+                    return;
+                }
+                File previewFile = createTempTextFile("enc_preview_", message);
+                File uploadFile = createTempTextFile("enc_upload_", encrypted);
+                respond(callback, new OutgoingTextResult(null, previewFile, uploadFile), null);
+            } catch (Exception e) {
+                respond(callback, null, e.getMessage());
+            }
+        });
+    }
+
+    public static File encryptOutgoingMediaFile(int account, long peerUserId, File sourceFile) throws Exception {
+        if (sourceFile == null || !sourceFile.exists() || sourceFile.length() == 0) {
+            throw new IOException("File is empty");
+        }
+        OutgoingPeerContext context = buildOutgoingPeerContext(account, peerUserId);
+        return encryptBinaryFile(sourceFile, context);
+    }
+
+    public static String getOutgoingEncryptionError(int account, long peerUserId) {
+        try {
+            buildOutgoingPeerContext(account, peerUserId);
+            return null;
+        } catch (Exception e) {
+            return e.getMessage();
+        }
     }
 
     public static DisplayResult getDisplayText(int account, long senderUserId, String originalText) {
@@ -275,6 +324,106 @@ public class EncryptionManager {
         }
     }
 
+    public static DisplayResult getDisplayText(int account, TLRPC.Message message, long senderUserId) {
+        if (message == null) {
+            return new DisplayResult("", LocaleController.getString(R.string.EncryptionMessageNotEncrypted), false, false);
+        }
+        if (isEncryptedTextDocument(message)) {
+            return getDisplayTextFromEncryptedDocument(account, message, senderUserId);
+        }
+        return getDisplayText(account, senderUserId, message.message);
+    }
+
+    public static boolean isEncryptedMessage(TLRPC.Message message) {
+        return message != null && (isEncryptedTextDocument(message)
+                || !TextUtils.isEmpty(message.message) && message.message.startsWith(ENCRYPTION_PREFIX));
+    }
+
+    public static boolean isEncryptedTextDocument(TLRPC.Message message) {
+        return message != null
+                && MessageObject.getMedia(message) instanceof TLRPC.TL_messageMediaDocument
+                && MessageObject.getMedia(message).document != null
+                && TextUtils.equals(MessageObject.getMedia(message).document.mime_type, ENCRYPTED_TEXT_DOCUMENT_MIME);
+    }
+
+    public static boolean isEncryptedImageDocument(TLRPC.Message message) {
+        return message != null
+                && MessageObject.getMedia(message) instanceof TLRPC.TL_messageMediaDocument
+                && isEncryptedImageDocument(MessageObject.getMedia(message).document);
+    }
+
+    public static void markEncryptedImageDocument(TLRPC.Document document) {
+        if (!isPreviewableImageDocument(document)) {
+            return;
+        }
+        TLRPC.TL_documentAttributeFilename fileNameAttribute = null;
+        for (int i = 0; i < document.attributes.size(); i++) {
+            TLRPC.DocumentAttribute attribute = document.attributes.get(i);
+            if (attribute instanceof TLRPC.TL_documentAttributeFilename) {
+                fileNameAttribute = (TLRPC.TL_documentAttributeFilename) attribute;
+                break;
+            }
+        }
+        if (fileNameAttribute == null) {
+            fileNameAttribute = new TLRPC.TL_documentAttributeFilename();
+            fileNameAttribute.file_name = ENCRYPTED_IMAGE_NAME_PREFIX + "image";
+            document.attributes.add(0, fileNameAttribute);
+            return;
+        }
+        if (TextUtils.isEmpty(fileNameAttribute.file_name)) {
+            fileNameAttribute.file_name = ENCRYPTED_IMAGE_NAME_PREFIX + "image";
+        } else if (!fileNameAttribute.file_name.startsWith(ENCRYPTED_IMAGE_NAME_PREFIX)) {
+            fileNameAttribute.file_name = ENCRYPTED_IMAGE_NAME_PREFIX + fileNameAttribute.file_name;
+        }
+    }
+
+    public static File ensureDecryptedMediaFile(int account, TLRPC.Message message, File file) {
+        if (file == null || !file.exists() || isEncryptedTextDocument(message)) {
+            return file;
+        }
+        EncryptedFileHeader header;
+        try {
+            header = readEncryptedFileHeader(file);
+        } catch (Exception e) {
+            return file;
+        }
+        if (header == null) {
+            return file;
+        }
+        File tempFile = null;
+        try {
+            KeyBundle keys = ensureKeys(account);
+            byte[] aesKey = tryDecryptAesKey(keys, header.keyToB64, header.keyFromB64);
+            if (aesKey == null) {
+                return file;
+            }
+            tempFile = new File(file.getParentFile(), file.getName() + ".dec");
+            decryptBinaryFile(file, tempFile, header, aesKey);
+            replaceFile(tempFile, file);
+        } catch (Exception e) {
+            if (tempFile != null && tempFile.exists()) {
+                tempFile.delete();
+            }
+        }
+        return file;
+    }
+
+    public static String getWarningTextForError(String error) {
+        if (TextUtils.isEmpty(error)) {
+            return LocaleController.getString(R.string.EncryptionFailedGeneric);
+        }
+        if (error.contains("Server address is empty")) {
+            return LocaleController.getString(R.string.EncryptionServerNotConfigured);
+        }
+        if (error.contains("User is not verified")) {
+            return LocaleController.getString(R.string.EncryptionSelfNotVerified);
+        }
+        if (error.contains("User not registered")) {
+            return LocaleController.getString(R.string.EncryptionRecipientUnavailable);
+        }
+        return LocaleController.getString(R.string.EncryptionFailedGeneric);
+    }
+
     private static String normalizeServerAddress(String address) {
         if (TextUtils.isEmpty(address)) {
             return "";
@@ -289,7 +438,26 @@ public class EncryptionManager {
         return normalized;
     }
 
-    private static void respond(SimpleCallback<String> callback, String result, String error) {
+    private static boolean isEncryptedImageDocument(TLRPC.Document document) {
+        if (!isPreviewableImageDocument(document)) {
+            return false;
+        }
+        String fileName = FileLoader.getDocumentFileName(document);
+        return !TextUtils.isEmpty(fileName) && fileName.startsWith(ENCRYPTED_IMAGE_NAME_PREFIX);
+    }
+
+    private static boolean isPreviewableImageDocument(TLRPC.Document document) {
+        if (document == null || TextUtils.isEmpty(document.mime_type)) {
+            return false;
+        }
+        String mimeType = document.mime_type.toLowerCase();
+        return mimeType.startsWith("image/")
+                && !"image/gif".equals(mimeType)
+                && !"image/webp".equals(mimeType)
+                && MessageObject.canPreviewDocument(document);
+    }
+
+    private static <T> void respond(SimpleCallback<T> callback, T result, String error) {
         AndroidUtilities.runOnUIThread(() -> {
             if (!TextUtils.isEmpty(error)) {
                 showEncryptionWarning(error);
@@ -317,6 +485,33 @@ public class EncryptionManager {
             return e.getClass().getSimpleName();
         }
         return e.getClass().getSimpleName() + ": " + message;
+    }
+
+    private static String encryptOutgoingTextBlocking(int account, long peerUserId, String message) throws Exception {
+        if (message.startsWith(ENCRYPTION_PREFIX)) {
+            return message;
+        }
+        OutgoingPeerContext context = buildOutgoingPeerContext(account, peerUserId);
+        return encryptPayload(context.keys, context.peerKey, message, context.senderUserId);
+    }
+
+    private static OutgoingPeerContext buildOutgoingPeerContext(int account, long peerUserId) throws Exception {
+        if (!DialogObject.isUserDialog(peerUserId)) {
+            throw new GeneralSecurityException("Peer is not a user dialog");
+        }
+        String server = getServerAddress(account);
+        if (TextUtils.isEmpty(server)) {
+            throw new IOException("Server address is empty");
+        }
+        if (!isVerified(account)) {
+            throw new GeneralSecurityException("User is not verified");
+        }
+        KeyBundle keys = ensureKeys(account);
+        PublicKeyInfo peerKey = getPublicKey(account, peerUserId);
+        if (peerKey == null) {
+            throw new GeneralSecurityException("User not registered or not verified");
+        }
+        return new OutgoingPeerContext(keys, peerKey, UserConfig.getInstance(account).getClientUserId());
     }
 
     private static KeyBundle ensureKeys(int account) throws GeneralSecurityException {
@@ -416,6 +611,183 @@ public class EncryptionManager {
         aes.init(Cipher.DECRYPT_MODE, new SecretKeySpec(aesKey, "AES"), new GCMParameterSpec(GCM_TAG_BITS, iv));
         byte[] plain = aes.doFinal(cipherText);
         return new String(plain, StandardCharsets.UTF_8);
+    }
+
+    private static File encryptBinaryFile(File sourceFile, OutgoingPeerContext context) throws Exception {
+        byte[] aesKey = new byte[AES_KEY_SIZE_BYTES];
+        new SecureRandom().nextBytes(aesKey);
+        byte[] iv = new byte[GCM_IV_BYTES];
+        new SecureRandom().nextBytes(iv);
+
+        JSONObject header = new JSONObject();
+        header.put("v", 1);
+        header.put("sender", context.senderUserId);
+        header.put("iv", Base64.encodeToString(iv, Base64.NO_WRAP));
+        header.put("key_to", Base64.encodeToString(rsaEncrypt(aesKey, context.peerKey.rsaPublic), Base64.NO_WRAP));
+        header.put("key_from", Base64.encodeToString(rsaEncrypt(aesKey, context.keys.rsaPublic), Base64.NO_WRAP));
+
+        byte[] headerBytes = header.toString().getBytes(StandardCharsets.UTF_8);
+        File targetFile = createTempBinaryFile(sourceFile.getName());
+        Cipher cipher = Cipher.getInstance("AES/GCM/NoPadding");
+        cipher.init(Cipher.ENCRYPT_MODE, new SecretKeySpec(aesKey, "AES"), new GCMParameterSpec(GCM_TAG_BITS, iv));
+
+        try (BufferedInputStream inputStream = new BufferedInputStream(new FileInputStream(sourceFile));
+             DataOutputStream outputStream = new DataOutputStream(new BufferedOutputStream(new FileOutputStream(targetFile)))) {
+            outputStream.write(ENCRYPTED_FILE_MAGIC);
+            outputStream.writeInt(headerBytes.length);
+            outputStream.write(headerBytes);
+            try (CipherOutputStream cipherOutputStream = new CipherOutputStream(outputStream, cipher)) {
+                byte[] buffer = new byte[FILE_BUFFER_SIZE];
+                int read;
+                while ((read = inputStream.read(buffer)) != -1) {
+                    cipherOutputStream.write(buffer, 0, read);
+                }
+            }
+        }
+        return targetFile;
+    }
+
+    private static void decryptBinaryFile(File sourceFile, File targetFile, EncryptedFileHeader header, byte[] aesKey) throws Exception {
+        Cipher cipher = Cipher.getInstance("AES/GCM/NoPadding");
+        cipher.init(Cipher.DECRYPT_MODE, new SecretKeySpec(aesKey, "AES"), new GCMParameterSpec(GCM_TAG_BITS, header.iv));
+        try (DataInputStream inputStream = new DataInputStream(new BufferedInputStream(new FileInputStream(sourceFile)))) {
+            inputStream.skipBytes(ENCRYPTED_FILE_MAGIC.length);
+            int headerLength = inputStream.readInt();
+            if (headerLength <= 0 || headerLength > FILE_HEADER_LIMIT) {
+                throw new IOException("Invalid encrypted file header");
+            }
+            inputStream.skipBytes(headerLength);
+            try (CipherInputStream cipherInputStream = new CipherInputStream(inputStream, cipher);
+                 BufferedOutputStream outputStream = new BufferedOutputStream(new FileOutputStream(targetFile))) {
+                byte[] buffer = new byte[FILE_BUFFER_SIZE];
+                int read;
+                while ((read = cipherInputStream.read(buffer)) != -1) {
+                    outputStream.write(buffer, 0, read);
+                }
+            }
+        }
+    }
+
+    private static EncryptedFileHeader readEncryptedFileHeader(File file) throws Exception {
+        try (DataInputStream inputStream = new DataInputStream(new BufferedInputStream(new FileInputStream(file)))) {
+            byte[] magic = new byte[ENCRYPTED_FILE_MAGIC.length];
+            if (inputStream.read(magic) != magic.length) {
+                return null;
+            }
+            for (int i = 0; i < magic.length; i++) {
+                if (magic[i] != ENCRYPTED_FILE_MAGIC[i]) {
+                    return null;
+                }
+            }
+            int headerLength = inputStream.readInt();
+            if (headerLength <= 0 || headerLength > FILE_HEADER_LIMIT) {
+                return null;
+            }
+            byte[] headerBytes = new byte[headerLength];
+            inputStream.readFully(headerBytes);
+            JSONObject header = new JSONObject(new String(headerBytes, StandardCharsets.UTF_8));
+            return new EncryptedFileHeader(
+                    Base64.decode(header.getString("iv"), Base64.NO_WRAP),
+                    header.getString("key_to"),
+                    header.getString("key_from")
+            );
+        }
+    }
+
+    private static DisplayResult getDisplayTextFromEncryptedDocument(int account, TLRPC.Message message, long senderUserId) {
+        if (message.params != null) {
+            String previewText = message.params.get(PARAM_PREVIEW_TEXT);
+            if (!TextUtils.isEmpty(previewText)) {
+                return new DisplayResult(previewText, LocaleController.getString(R.string.EncryptionMessageDecrypted), true, false);
+            }
+        }
+        File localFile = getLocalMessageFile(account, message);
+        if (localFile == null || !localFile.exists()) {
+            TLRPC.Document document = MessageObject.getMedia(message) != null ? MessageObject.getMedia(message).document : null;
+            if (document != null) {
+                String attachFileName = FileLoader.getAttachFileName(document);
+                FileLoader fileLoader = FileLoader.getInstance(account);
+                if (!fileLoader.isLoadingFile(attachFileName)) {
+                    fileLoader.loadFile(document, message, FileLoader.PRIORITY_HIGH, 0);
+                }
+            }
+            return new DisplayResult(LocaleController.getString(R.string.Loading), LocaleController.getString(R.string.EncryptionMessageDecrypted), true, false);
+        }
+        try {
+            String text = readUtf8File(localFile);
+            if (TextUtils.isEmpty(text)) {
+                return new DisplayResult("", LocaleController.getString(R.string.EncryptionMessageDecryptError), true, true);
+            }
+            if (text.startsWith(ENCRYPTION_PREFIX)) {
+                return getDisplayText(account, senderUserId, text);
+            }
+            return new DisplayResult(text, LocaleController.getString(R.string.EncryptionMessageDecrypted), true, false);
+        } catch (Exception e) {
+            return new DisplayResult("", LocaleController.getString(R.string.EncryptionMessageDecryptError), true, true);
+        }
+    }
+
+    private static File getLocalMessageFile(int account, TLRPC.Message message) {
+        if (message == null) {
+            return null;
+        }
+        if (!TextUtils.isEmpty(message.attachPath)) {
+            File attachFile = new File(message.attachPath);
+            if (attachFile.exists()) {
+                return attachFile;
+            }
+        }
+        File file = FileLoader.getInstance(account).getPathToMessage(message);
+        if (file != null && file.exists()) {
+            return file;
+        }
+        return null;
+    }
+
+    private static String readUtf8File(File file) throws IOException {
+        try (BufferedInputStream inputStream = new BufferedInputStream(new FileInputStream(file))) {
+            byte[] buffer = new byte[(int) file.length()];
+            int offset = 0;
+            int read;
+            while (offset < buffer.length && (read = inputStream.read(buffer, offset, buffer.length - offset)) != -1) {
+                offset += read;
+            }
+            return new String(buffer, 0, offset, StandardCharsets.UTF_8);
+        }
+    }
+
+    private static File createTempTextFile(String prefix, String text) throws IOException {
+        File file = File.createTempFile(prefix, ".txt", FileLoader.getDirectory(FileLoader.MEDIA_DIR_CACHE));
+        try (FileOutputStream outputStream = new FileOutputStream(file)) {
+            outputStream.write(text.getBytes(StandardCharsets.UTF_8));
+        }
+        return file;
+    }
+
+    private static File createTempBinaryFile(String sourceName) throws IOException {
+        String suffix = ".enc";
+        int dot = sourceName == null ? -1 : sourceName.lastIndexOf('.');
+        if (dot >= 0 && dot < sourceName.length() - 1) {
+            suffix = sourceName.substring(dot) + ".enc";
+        }
+        return File.createTempFile("enc_media_", suffix, FileLoader.getDirectory(FileLoader.MEDIA_DIR_CACHE));
+    }
+
+    private static void replaceFile(File source, File target) throws IOException {
+        if (target.exists() && !target.delete()) {
+            throw new IOException("Unable to delete old file");
+        }
+        if (!source.renameTo(target)) {
+            try (BufferedInputStream inputStream = new BufferedInputStream(new FileInputStream(source));
+                 BufferedOutputStream outputStream = new BufferedOutputStream(new FileOutputStream(target))) {
+                byte[] buffer = new byte[FILE_BUFFER_SIZE];
+                int read;
+                while ((read = inputStream.read(buffer)) != -1) {
+                    outputStream.write(buffer, 0, read);
+                }
+            }
+            source.delete();
+        }
     }
 
     private static PublicKeyInfo getPublicKey(int account, long userId) throws IOException, JSONException, GeneralSecurityException {
@@ -590,6 +962,30 @@ public class EncryptionManager {
 
         PublicKeyInfo(PublicKey rsaPublic) {
             this.rsaPublic = rsaPublic;
+        }
+    }
+
+    private static class OutgoingPeerContext {
+        final KeyBundle keys;
+        final PublicKeyInfo peerKey;
+        final long senderUserId;
+
+        OutgoingPeerContext(KeyBundle keys, PublicKeyInfo peerKey, long senderUserId) {
+            this.keys = keys;
+            this.peerKey = peerKey;
+            this.senderUserId = senderUserId;
+        }
+    }
+
+    private static class EncryptedFileHeader {
+        final byte[] iv;
+        final String keyToB64;
+        final String keyFromB64;
+
+        EncryptedFileHeader(byte[] iv, String keyToB64, String keyFromB64) {
+            this.iv = iv;
+            this.keyToB64 = keyToB64;
+            this.keyFromB64 = keyFromB64;
         }
     }
 }

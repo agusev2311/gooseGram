@@ -1006,9 +1006,13 @@ public class FileLoader extends BaseController {
                     checkDownloadQueue(operation, operation.getQueue(), 0);
                     return;
                 }
+                File resolvedFile = finalFile;
+                if (parentObject instanceof MessageObject) {
+                    resolvedFile = EncryptionManager.ensureDecryptedMediaFile(currentAccount, ((MessageObject) parentObject).messageOwner, finalFile);
+                }
                 FilePathDatabase.FileMeta fileMeta = getFileMetadataFromParent(currentAccount, parentObject);
                 if (fileMeta != null) {
-                    getFileLoader().getFileDatabase().saveFileDialogId(finalFile, fileMeta);
+                    getFileLoader().getFileDatabase().saveFileDialogId(resolvedFile, fileMeta);
                 }
                 if (parentObject instanceof MessageObject) {
                     MessageObject messageObject = (MessageObject) parentObject;
@@ -1020,7 +1024,7 @@ public class FileLoader extends BaseController {
                 if (!operation.isPreloadVideoOperation()) {
                     loadOperationPathsUI.remove(fileName);
                     if (delegate != null) {
-                        delegate.fileDidLoaded(fileName, finalFile, parentObject, finalType);
+                        delegate.fileDidLoaded(fileName, resolvedFile, parentObject, finalType);
                     }
                 }
 
@@ -1283,35 +1287,41 @@ public class FileLoader extends BaseController {
                 if (sizes.size() > 0) {
                     TLRPC.PhotoSize sizeFull = getClosestPhotoSizeWithSize(sizes, AndroidUtilities.getPhotoSize());
                     if (sizeFull != null) {
-                        return getPathToAttach(sizeFull, null, forceCache, useFileDatabaseQueue);
+                        File file = getPathToAttach(sizeFull, null, forceCache, useFileDatabaseQueue);
+                        return EncryptionManager.ensureDecryptedMediaFile(currentAccount, message, file);
                     }
                 }
             }
         } else {
             if (MessageObject.getMedia(message) instanceof TLRPC.TL_messageMediaDocument) {
-                return getPathToAttach(MessageObject.getMedia(message).document, null, forceCache || MessageObject.getMedia(message).ttl_seconds != 0, useFileDatabaseQueue);
+                File file = getPathToAttach(MessageObject.getMedia(message).document, null, forceCache || MessageObject.getMedia(message).ttl_seconds != 0, useFileDatabaseQueue);
+                return EncryptionManager.ensureDecryptedMediaFile(currentAccount, message, file);
             } else if (MessageObject.getMedia(message) instanceof TLRPC.TL_messageMediaPhoto) {
                 ArrayList<TLRPC.PhotoSize> sizes = MessageObject.getMedia(message).photo.sizes;
                 if (sizes.size() > 0) {
                     TLRPC.PhotoSize sizeFull = getClosestPhotoSizeWithSize(sizes, AndroidUtilities.getPhotoSize(true), false, null, true);
                     if (sizeFull != null) {
-                        return getPathToAttach(sizeFull, null, forceCache || MessageObject.getMedia(message).ttl_seconds != 0, useFileDatabaseQueue);
+                        File file = getPathToAttach(sizeFull, null, forceCache || MessageObject.getMedia(message).ttl_seconds != 0, useFileDatabaseQueue);
+                        return EncryptionManager.ensureDecryptedMediaFile(currentAccount, message, file);
                     }
                 }
             } else if (MessageObject.getMedia(message) instanceof TLRPC.TL_messageMediaWebPage) {
                 if (MessageObject.getMedia(message).webpage.document != null) {
-                    return getPathToAttach(MessageObject.getMedia(message).webpage.document, null, forceCache, useFileDatabaseQueue);
+                    File file = getPathToAttach(MessageObject.getMedia(message).webpage.document, null, forceCache, useFileDatabaseQueue);
+                    return EncryptionManager.ensureDecryptedMediaFile(currentAccount, message, file);
                 } else if (MessageObject.getMedia(message).webpage.photo != null) {
                     ArrayList<TLRPC.PhotoSize> sizes = MessageObject.getMedia(message).webpage.photo.sizes;
                     if (sizes.size() > 0) {
                         TLRPC.PhotoSize sizeFull = getClosestPhotoSizeWithSize(sizes, AndroidUtilities.getPhotoSize());
                         if (sizeFull != null) {
-                            return getPathToAttach(sizeFull, null, forceCache, useFileDatabaseQueue);
+                            File file = getPathToAttach(sizeFull, null, forceCache, useFileDatabaseQueue);
+                            return EncryptionManager.ensureDecryptedMediaFile(currentAccount, message, file);
                         }
                     }
                 }
             } else if (MessageObject.getMedia(message) instanceof TLRPC.TL_messageMediaInvoice) {
-                return getPathToAttach(((TLRPC.TL_messageMediaInvoice) MessageObject.getMedia(message)).photo, null, true, useFileDatabaseQueue);
+                File file = getPathToAttach(((TLRPC.TL_messageMediaInvoice) MessageObject.getMedia(message)).photo, null, true, useFileDatabaseQueue);
+                return EncryptionManager.ensureDecryptedMediaFile(currentAccount, message, file);
             }
         }
         return new File("");

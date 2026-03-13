@@ -41,6 +41,7 @@ public class EncryptionSettingsActivity extends BaseFragment {
     private int bubbleColorRow;
     private int registerRow;
     private int verifyRow;
+    private int transferRow;
     private int statusRow;
     private int rowCount;
 
@@ -63,6 +64,7 @@ public class EncryptionSettingsActivity extends BaseFragment {
         } else {
             verifyRow = -1;
         }
+        transferRow = rowCount++;
         statusRow = rowCount++;
     }
 
@@ -102,6 +104,8 @@ public class EncryptionSettingsActivity extends BaseFragment {
                 showVerifyDialog();
             } else if (position == bubbleColorRow) {
                 showMessageBackgroundColorPicker();
+            } else if (position == transferRow) {
+                startKeyTransfer();
             }
         });
 
@@ -221,6 +225,29 @@ public class EncryptionSettingsActivity extends BaseFragment {
         showDialog(bottomSheet);
     }
 
+    private void startKeyTransfer() {
+        if (getParentActivity() == null) {
+            return;
+        }
+        saveServerAddress();
+        EncryptionManager.sendKeyTransferToSavedMessages(currentAccount, (result, error) -> {
+            if (!TextUtils.isEmpty(error) || result == null) {
+                BulletinFactory.of(this).createSimpleBulletin(R.raw.error, TextUtils.isEmpty(error) ? LocaleController.getString(R.string.EncryptionKeyTransferExportFailed) : error).show();
+                return;
+            }
+            AlertDialog.Builder builder = new AlertDialog.Builder(getParentActivity());
+            builder.setTitle(LocaleController.getString(R.string.EncryptionKeyTransferDialogTitle));
+            builder.setMessage(LocaleController.formatString("EncryptionKeyTransferPasswordText", R.string.EncryptionKeyTransferPasswordText, result.password));
+            builder.setPositiveButton(LocaleController.getString(R.string.OK), null);
+            builder.setNeutralButton(LocaleController.getString(R.string.Copy), (dialog, which) -> {
+                if (AndroidUtilities.addToClipboard(result.password)) {
+                    BulletinFactory.of(this).createSimpleBulletin(R.raw.copy, LocaleController.getString(R.string.EncryptionKeyTransferPasswordCopied)).show();
+                }
+            });
+            showDialog(builder.create());
+        });
+    }
+
     private class ListAdapter extends RecyclerListView.SelectionAdapter {
         private final Context mContext;
 
@@ -250,9 +277,11 @@ public class EncryptionSettingsActivity extends BaseFragment {
                         String value = color == 0 ? LocaleController.getString(R.string.Default) : String.format(Locale.US, "#%06X", 0xFFFFFF & color);
                         textCell.setTextAndValue(LocaleController.getString(R.string.EncryptionMessageBackground), value, true);
                     } else if (position == registerRow) {
-                        textCell.setText(LocaleController.getString(R.string.EncryptionRegister), verifyRow != -1);
+                        textCell.setText(LocaleController.getString(R.string.EncryptionRegister), true);
                     } else if (position == verifyRow) {
-                        textCell.setText(LocaleController.getString(R.string.EncryptionVerify), false);
+                        textCell.setText(LocaleController.getString(R.string.EncryptionVerify), true);
+                    } else if (position == transferRow) {
+                        textCell.setText(LocaleController.getString(R.string.EncryptionKeyTransfer), false);
                     }
                     break;
                 }
@@ -276,7 +305,7 @@ public class EncryptionSettingsActivity extends BaseFragment {
         @Override
         public boolean isEnabled(RecyclerView.ViewHolder holder) {
             int position = holder.getAdapterPosition();
-            return position == registerRow || position == verifyRow || position == bubbleColorRow;
+            return position == registerRow || position == verifyRow || position == bubbleColorRow || position == transferRow;
         }
 
         @Override
@@ -304,7 +333,7 @@ public class EncryptionSettingsActivity extends BaseFragment {
         public int getItemViewType(int position) {
             if (position == serverRow) {
                 return 0;
-            } else if (position == bubbleColorRow || position == registerRow || position == verifyRow) {
+            } else if (position == bubbleColorRow || position == registerRow || position == verifyRow || position == transferRow) {
                 return 1;
             } else {
                 return 2;

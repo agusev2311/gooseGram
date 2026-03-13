@@ -151,6 +151,7 @@ import org.telegram.messenger.ContactsController;
 import org.telegram.messenger.DialogObject;
 import org.telegram.messenger.DocumentObject;
 import org.telegram.messenger.DownloadController;
+import org.telegram.messenger.EncryptionManager;
 import org.telegram.messenger.Emoji;
 import org.telegram.messenger.EmojiData;
 import org.telegram.messenger.FactCheckController;
@@ -33779,6 +33780,74 @@ public class ChatActivity extends BaseFragment implements
         showDialog(builder.create());
     }
 
+    private void showKeyTransferImportDialog(MessageObject messageObject) {
+        if (getParentActivity() == null || messageObject == null || messageObject.messageOwner == null) {
+            return;
+        }
+        File localFile = getLocalKeyTransferFile(messageObject);
+        if (localFile == null || !localFile.exists()) {
+            BulletinFactory.of(this).createSimpleBulletin(R.raw.error, LocaleController.getString(R.string.EncryptionKeyTransferDownloadFirst)).show();
+            return;
+        }
+
+        EditTextBoldCursor input = new EditTextBoldCursor(getParentActivity());
+        input.setHint(LocaleController.getString(R.string.EncryptionKeyTransferPasswordHint));
+        input.setTextSize(16);
+        input.setTextColor(Theme.getColor(Theme.key_windowBackgroundWhiteBlackText));
+        input.setHintTextColor(Theme.getColor(Theme.key_windowBackgroundWhiteHintText));
+        input.setSingleLine(true);
+
+        FrameLayout container = new FrameLayout(getParentActivity());
+        container.addView(input, LayoutHelper.createFrame(LayoutHelper.MATCH_PARENT, LayoutHelper.WRAP_CONTENT, Gravity.CENTER_VERTICAL, 24, 8, 24, 8));
+
+        AlertDialog.Builder builder = new AlertDialog.Builder(getParentActivity(), themeDelegate);
+        builder.setTitle(LocaleController.getString(R.string.EncryptionKeyTransferImportTitle));
+        builder.setView(container);
+        builder.setNegativeButton(LocaleController.getString(R.string.Cancel), null);
+        builder.setPositiveButton(LocaleController.getString(R.string.Import), (dialog, which) -> {
+            String password = input.getText().toString().trim();
+            if (TextUtils.isEmpty(password)) {
+                BulletinFactory.of(this).createSimpleBulletin(R.raw.error, LocaleController.getString(R.string.EncryptionKeyTransferPasswordEmpty)).show();
+                return;
+            }
+            EncryptionManager.importKeyTransferFile(currentAccount, messageObject.messageOwner, localFile, password, (result, error) -> {
+                if (!TextUtils.isEmpty(error)) {
+                    BulletinFactory.of(ChatActivity.this).createSimpleBulletin(R.raw.error, error).show();
+                    return;
+                }
+                deleteKeyTransferMessage(messageObject);
+                BulletinFactory.of(ChatActivity.this).createSimpleBulletin(R.raw.done, result).show();
+            });
+        });
+        showDialog(builder.create());
+    }
+
+    private File getLocalKeyTransferFile(MessageObject messageObject) {
+        if (messageObject == null || messageObject.messageOwner == null) {
+            return null;
+        }
+        if (!TextUtils.isEmpty(messageObject.messageOwner.attachPath)) {
+            File attachFile = new File(messageObject.messageOwner.attachPath);
+            if (attachFile.exists()) {
+                return attachFile;
+            }
+        }
+        File messageFile = getFileLoader().getPathToMessage(messageObject.messageOwner);
+        if (messageFile != null && messageFile.exists()) {
+            return messageFile;
+        }
+        return null;
+    }
+
+    private void deleteKeyTransferMessage(MessageObject messageObject) {
+        if (messageObject == null || messageObject.getId() <= 0) {
+            return;
+        }
+        ArrayList<Integer> ids = new ArrayList<>();
+        ids.add(messageObject.getId());
+        getMessagesController().deleteMessages(ids, null, null, messageObject.getDialogId(), (int) messageObject.getTopicId(), true, chatMode);
+    }
+
     public void openSearchWithText(String text) {
         boolean delay = false;
         if (savedMessagesHint != null && savedMessagesHint.shown()) {
@@ -39601,6 +39670,10 @@ public class ChatActivity extends BaseFragment implements
                     } else {
                         scrollToPositionOnRecreate = -1;
                     }
+                }
+                if (EncryptionManager.isKeyTransferMessage(message.messageOwner)) {
+                    showKeyTransferImportDialog(message);
+                    return;
                 }
                 boolean handled = false;
                 if (message.canPreviewDocument()) {

@@ -695,7 +695,7 @@ public class NotificationCenter {
 
     public void addObserver(NotificationCenterDelegate observer, int id) {
         if (BuildVars.DEBUG_VERSION) {
-            if (Thread.currentThread() != ApplicationLoader.applicationHandler.getLooper().getThread()) {
+            if (ApplicationLoader.applicationHandler != null && Thread.currentThread() != ApplicationLoader.applicationHandler.getLooper().getThread()) {
                 throw new RuntimeException("addObserver allowed only from MAIN thread");
             }
         }

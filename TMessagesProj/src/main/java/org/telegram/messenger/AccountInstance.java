@@ -19,6 +19,9 @@ public class AccountInstance {
                 }
             }
         }
+        if (ApplicationLoader.applicationHandler != null) {
+            KeyTransferController.getInstance(num);
+        }
         return localInstance;
     }
 

@@ -35,20 +35,26 @@ import java.security.PublicKey;
 import java.security.SecureRandom;
 import java.security.spec.PKCS8EncodedKeySpec;
 import java.security.spec.X509EncodedKeySpec;
+import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 
 import javax.crypto.Cipher;
 import javax.crypto.CipherInputStream;
 import javax.crypto.CipherOutputStream;
+import javax.crypto.SecretKeyFactory;
+import javax.crypto.spec.PBEKeySpec;
 import javax.crypto.spec.GCMParameterSpec;
 import javax.crypto.spec.SecretKeySpec;
 
 public class EncryptionManager {
     public static final String ENCRYPTION_PREFIX = "[ENCRYPTED] ";
     public static final String ENCRYPTED_TEXT_DOCUMENT_MIME = "application/x-goosegram-encrypted-text";
+    public static final String KEY_TRANSFER_DOCUMENT_MIME = "application/x-goosegram-key-transfer";
     public static final String PARAM_UPLOAD_PATH = "enc_upload_path";
     public static final String PARAM_PREVIEW_TEXT = "enc_preview_text";
+    public static final String PARAM_SKIP_AUTO_ENCRYPTION = "enc_skip_auto";
     public static final String ENCRYPTED_IMAGE_NAME_PREFIX = "ggenc_photo_";
 
     private static final String PREF_CONFIG = "encryption_config";
@@ -63,6 +69,15 @@ public class EncryptionManager {
     private static final int FILE_BUFFER_SIZE = 32 * 1024;
     private static final int FILE_HEADER_LIMIT = 32 * 1024;
     private static final byte[] ENCRYPTED_FILE_MAGIC = new byte[]{'G', 'G', 'E', '1'};
+    private static final String KEY_TRANSFER_MAGIC = "GGKT1";
+    private static final String KEY_TRANSFER_ACK_PREFIX = "[GG_KEY_TRANSFER_ACK]";
+    private static final String KEY_TRANSFER_FILE_EXTENSION = ".ggkey";
+    private static final String KEY_TRANSFER_FILE_PREFIX = "gg_key_transfer_";
+    private static final int KEY_TRANSFER_SALT_BYTES = 16;
+    private static final int KEY_TRANSFER_PBKDF2_ITERATIONS = 150000;
+    private static final int KEY_TRANSFER_PASSWORD_GROUPS = 4;
+    private static final int KEY_TRANSFER_PASSWORD_GROUP_SIZE = 5;
+    private static final String KEY_TRANSFER_PASSWORD_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
 
     private static final Map<String, String> publicKeyCache = new ConcurrentHashMap<>();
 
@@ -126,12 +141,237 @@ public class EncryptionManager {
         }
     }
 
+    public static class KeyTransferExportResult {
+        public final String password;
+        public final String transferId;
+
+        public KeyTransferExportResult(String password, String transferId) {
+            this.password = password;
+            this.transferId = transferId;
+        }
+    }
+
     public static int getCustomMessageBubbleColor(int account) {
         return getPrefs(PREF_CONFIG).getInt(keyForAccount(PREF_MESSAGE_BUBBLE_COLOR, account), 0);
     }
 
     public static void setCustomMessageBubbleColor(int account, int color) {
         getPrefs(PREF_CONFIG).edit().putInt(keyForAccount(PREF_MESSAGE_BUBBLE_COLOR, account), color).apply();
+    }
+
+    private static String dialogEncryptionKey(int account, long dialogId) {
+        return keyForAccount("dialog_encryption_enabled_" + dialogId, account);
+    }
+
+    public static boolean canUseEncryptionInDialog(int account, long dialogId) {
+        if (dialogId == 0 || DialogObject.isEncryptedDialog(dialogId) || !DialogObject.isUserDialog(dialogId)) {
+            return false;
+        }
+        long selfUserId = UserConfig.getInstance(account).getClientUserId();
+        if (selfUserId != 0 && dialogId == selfUserId) {
+            return false;
+        }
+        TLRPC.User user = MessagesController.getInstance(account).getUser(dialogId);
+        return user == null || !user.bot;
+    }
+
+    public static boolean isEncryptionEnabledForDialog(int account, long dialogId) {
+        return canUseEncryptionInDialog(account, dialogId)
+                && getPrefs(PREF_CONFIG).getBoolean(dialogEncryptionKey(account, dialogId), true);
+    }
+
+    public static void setEncryptionEnabledForDialog(int account, long dialogId, boolean enabled) {
+        SharedPreferences.Editor editor = getPrefs(PREF_CONFIG).edit();
+        if (!canUseEncryptionInDialog(account, dialogId)) {
+            editor.remove(dialogEncryptionKey(account, dialogId)).apply();
+            return;
+        }
+        editor.putBoolean(dialogEncryptionKey(account, dialogId), enabled).apply();
+    }
+
+    public static void sendKeyTransferToSavedMessages(int account, SimpleCallback<KeyTransferExportResult> callback) {
+        Utilities.globalQueue.postRunnable(() -> {
+            try {
+                long selfId = UserConfig.getInstance(account).getClientUserId();
+                if (selfId == 0) {
+                    postResult(callback, null, LocaleController.getString(R.string.EncryptionKeyTransferWrongAccount));
+                    return;
+                }
+                KeyBundle keys = ensureKeys(account);
+                String password = generateKeyTransferPassword();
+                String normalizedPassword = normalizeKeyTransferPassword(password);
+                String transferId = generateTransferId();
+
+                JSONObject payload = new JSONObject();
+                payload.put("magic", KEY_TRANSFER_MAGIC);
+                payload.put("v", 1);
+                payload.put("transfer_id", transferId);
+                payload.put("user_id", selfId);
+                payload.put("server", getServerAddress(account));
+                payload.put("registered", isRegistered(account));
+                payload.put("verified", isVerified(account));
+                payload.put("rsa_public", keys.rsaPublicB64);
+                payload.put("rsa_private", getPrefs(PREF_KEYS).getString(keyForAccount("rsa_private", account), ""));
+                payload.put("created_at", System.currentTimeMillis());
+
+                byte[] salt = new byte[KEY_TRANSFER_SALT_BYTES];
+                byte[] iv = new byte[GCM_IV_BYTES];
+                SecureRandom secureRandom = new SecureRandom();
+                secureRandom.nextBytes(salt);
+                secureRandom.nextBytes(iv);
+                byte[] encrypted = encryptWithPassword(normalizedPassword, payload.toString().getBytes(StandardCharsets.UTF_8), salt, iv);
+
+                JSONObject filePayload = new JSONObject();
+                filePayload.put("magic", KEY_TRANSFER_MAGIC);
+                filePayload.put("v", 1);
+                filePayload.put("transfer_id", transferId);
+                filePayload.put("salt", Base64.encodeToString(salt, Base64.NO_WRAP));
+                filePayload.put("iv", Base64.encodeToString(iv, Base64.NO_WRAP));
+                filePayload.put("ciphertext", Base64.encodeToString(encrypted, Base64.NO_WRAP));
+
+                File transferFile = createTempKeyTransferFile(transferId);
+                try (FileOutputStream outputStream = new FileOutputStream(transferFile)) {
+                    outputStream.write(filePayload.toString().getBytes(StandardCharsets.UTF_8));
+                }
+
+                AndroidUtilities.runOnUIThread(() -> {
+                    ArrayList<String> files = new ArrayList<>();
+                    files.add(transferFile.getAbsolutePath());
+                    SendMessagesHelper.prepareSendingDocuments(
+                            AccountInstance.getInstance(account),
+                            files,
+                            files,
+                            null,
+                            LocaleController.getString(R.string.EncryptionKeyTransferDocumentCaption),
+                            null,
+                            selfId,
+                            null,
+                            null,
+                            null,
+                            null,
+                            null,
+                            false,
+                            0,
+                            null,
+                            null,
+                            0,
+                            0,
+                            false,
+                            0
+                    );
+                    callback.onResult(new KeyTransferExportResult(password, transferId), null);
+                });
+            } catch (Exception e) {
+                postResult(callback, null, LocaleController.getString(R.string.EncryptionKeyTransferExportFailed));
+            }
+        });
+    }
+
+    public static void importKeyTransferFile(int account, TLRPC.Message message, File file, String password, SimpleCallback<String> callback) {
+        Utilities.globalQueue.postRunnable(() -> {
+            if (file == null || !file.exists()) {
+                postResult(callback, null, LocaleController.getString(R.string.EncryptionKeyTransferDownloadFirst));
+                return;
+            }
+            if (message != null && !isKeyTransferMessage(message)) {
+                postResult(callback, null, LocaleController.getString(R.string.EncryptionKeyTransferInvalidFile));
+                return;
+            }
+            try {
+                JSONObject wrapper = new JSONObject(readUtf8File(file));
+                if (!TextUtils.equals(KEY_TRANSFER_MAGIC, wrapper.optString("magic"))) {
+                    postResult(callback, null, LocaleController.getString(R.string.EncryptionKeyTransferInvalidFile));
+                    return;
+                }
+
+                byte[] salt = Base64.decode(wrapper.getString("salt"), Base64.NO_WRAP);
+                byte[] iv = Base64.decode(wrapper.getString("iv"), Base64.NO_WRAP);
+                byte[] cipherText = Base64.decode(wrapper.getString("ciphertext"), Base64.NO_WRAP);
+                byte[] plain = decryptWithPassword(normalizeKeyTransferPassword(password), cipherText, salt, iv);
+                JSONObject payload = new JSONObject(new String(plain, StandardCharsets.UTF_8));
+                if (!TextUtils.equals(KEY_TRANSFER_MAGIC, payload.optString("magic"))) {
+                    postResult(callback, null, LocaleController.getString(R.string.EncryptionKeyTransferInvalidFile));
+                    return;
+                }
+
+                long currentUserId = UserConfig.getInstance(account).getClientUserId();
+                long payloadUserId = payload.optLong("user_id", 0);
+                if (currentUserId == 0 || payloadUserId == 0 || currentUserId != payloadUserId) {
+                    postResult(callback, null, LocaleController.getString(R.string.EncryptionKeyTransferWrongAccount));
+                    return;
+                }
+
+                String publicKey = payload.optString("rsa_public", "");
+                String privateKey = payload.optString("rsa_private", "");
+                if (TextUtils.isEmpty(publicKey) || TextUtils.isEmpty(privateKey)) {
+                    postResult(callback, null, LocaleController.getString(R.string.EncryptionKeyTransferInvalidFile));
+                    return;
+                }
+                validateImportedKeyPair(publicKey, privateKey);
+
+                SharedPreferences.Editor keysEditor = getPrefs(PREF_KEYS).edit();
+                keysEditor.putString(keyForAccount("rsa_public", account), publicKey);
+                keysEditor.putString(keyForAccount("rsa_private", account), privateKey);
+                keysEditor.apply();
+
+                SharedPreferences.Editor configEditor = getPrefs(PREF_CONFIG).edit();
+                configEditor.putString(keyForAccount("server", account), normalizeServerAddress(payload.optString("server", "")));
+                configEditor.putBoolean(keyForAccount("registered", account), payload.optBoolean("registered", false));
+                configEditor.putBoolean(keyForAccount("verified", account), payload.optBoolean("verified", false));
+                configEditor.apply();
+                clearCache(account);
+
+                if (file.exists()) {
+                    file.delete();
+                }
+
+                String transferId = payload.optString("transfer_id", wrapper.optString("transfer_id", ""));
+                if (!TextUtils.isEmpty(transferId)) {
+                    sendKeyTransferAck(account, transferId);
+                }
+                postResult(callback, LocaleController.getString(R.string.EncryptionKeyTransferImportSuccess), null);
+            } catch (Exception e) {
+                postResult(callback, null, LocaleController.getString(R.string.EncryptionKeyTransferInvalidPassword));
+            }
+        });
+    }
+
+    public static boolean isKeyTransferMessage(TLRPC.Message message) {
+        if (message == null || !(MessageObject.getMedia(message) instanceof TLRPC.TL_messageMediaDocument)) {
+            return false;
+        }
+        return isKeyTransferDocument(MessageObject.getMedia(message).document);
+    }
+
+    public static boolean isKeyTransferDocument(TLRPC.Document document) {
+        if (document == null) {
+            return false;
+        }
+        if (TextUtils.equals(document.mime_type, KEY_TRANSFER_DOCUMENT_MIME)) {
+            return true;
+        }
+        return isKeyTransferFileName(FileLoader.getDocumentFileName(document));
+    }
+
+    public static boolean isKeyTransferFileName(String fileName) {
+        return !TextUtils.isEmpty(fileName) && fileName.toLowerCase().endsWith(KEY_TRANSFER_FILE_EXTENSION);
+    }
+
+    public static boolean shouldSkipAutoEncryption(Map<String, String> params, TLRPC.Document document, String path) {
+        if (params != null && "1".equals(params.get(PARAM_SKIP_AUTO_ENCRYPTION))) {
+            return true;
+        }
+        if (isKeyTransferDocument(document)) {
+            return true;
+        }
+        return isKeyTransferFileName(path);
+    }
+
+    public static String getKeyTransferAckText(TLRPC.Message message) {
+        if (message == null || TextUtils.isEmpty(message.message) || !message.message.startsWith(KEY_TRANSFER_ACK_PREFIX)) {
+            return null;
+        }
+        return LocaleController.getString(R.string.EncryptionKeyTransferAckMessage);
     }
 
     public static void clearCache(int account) {
@@ -287,6 +527,9 @@ public class EncryptionManager {
     public static DisplayResult getDisplayText(int account, long senderUserId, String originalText) {
         if (TextUtils.isEmpty(originalText)) {
             return new DisplayResult("", LocaleController.getString(R.string.EncryptionMessageNotEncrypted), false, false);
+        }
+        if (originalText.startsWith(KEY_TRANSFER_ACK_PREFIX)) {
+            return new DisplayResult(LocaleController.getString(R.string.EncryptionKeyTransferAckMessage), null, false, false);
         }
         if (!originalText.startsWith(ENCRYPTION_PREFIX)) {
             return new DisplayResult(originalText, LocaleController.getString(R.string.EncryptionMessageNotEncrypted), false, false);
@@ -466,6 +709,10 @@ public class EncryptionManager {
         });
     }
 
+    private static <T> void postResult(SimpleCallback<T> callback, T result, String error) {
+        AndroidUtilities.runOnUIThread(() -> callback.onResult(result, error));
+    }
+
     private static boolean responseIndicatesSuccess(JSONObject response, String keyword) {
         if (response == null) {
             return false;
@@ -611,6 +858,31 @@ public class EncryptionManager {
         aes.init(Cipher.DECRYPT_MODE, new SecretKeySpec(aesKey, "AES"), new GCMParameterSpec(GCM_TAG_BITS, iv));
         byte[] plain = aes.doFinal(cipherText);
         return new String(plain, StandardCharsets.UTF_8);
+    }
+
+    private static byte[] encryptWithPassword(String password, byte[] plain, byte[] salt, byte[] iv) throws GeneralSecurityException {
+        Cipher cipher = Cipher.getInstance("AES/GCM/NoPadding");
+        cipher.init(Cipher.ENCRYPT_MODE, new SecretKeySpec(derivePasswordKey(password, salt), "AES"), new GCMParameterSpec(GCM_TAG_BITS, iv));
+        return cipher.doFinal(plain);
+    }
+
+    private static byte[] decryptWithPassword(String password, byte[] cipherText, byte[] salt, byte[] iv) throws GeneralSecurityException {
+        Cipher cipher = Cipher.getInstance("AES/GCM/NoPadding");
+        cipher.init(Cipher.DECRYPT_MODE, new SecretKeySpec(derivePasswordKey(password, salt), "AES"), new GCMParameterSpec(GCM_TAG_BITS, iv));
+        return cipher.doFinal(cipherText);
+    }
+
+    private static byte[] derivePasswordKey(String password, byte[] salt) throws GeneralSecurityException {
+        PBEKeySpec keySpec = new PBEKeySpec(password.toCharArray(), salt, KEY_TRANSFER_PBKDF2_ITERATIONS, AES_KEY_SIZE_BYTES * 8);
+        try {
+            try {
+                return SecretKeyFactory.getInstance("PBKDF2WithHmacSHA256").generateSecret(keySpec).getEncoded();
+            } catch (GeneralSecurityException ignore) {
+                return SecretKeyFactory.getInstance("PBKDF2WithHmacSHA1").generateSecret(keySpec).getEncoded();
+            }
+        } finally {
+            keySpec.clearPassword();
+        }
     }
 
     private static File encryptBinaryFile(File sourceFile, OutgoingPeerContext context) throws Exception {
@@ -760,6 +1032,17 @@ public class EncryptionManager {
         File file = File.createTempFile(prefix, ".txt", FileLoader.getDirectory(FileLoader.MEDIA_DIR_CACHE));
         try (FileOutputStream outputStream = new FileOutputStream(file)) {
             outputStream.write(text.getBytes(StandardCharsets.UTF_8));
+        }
+        return file;
+    }
+
+    private static File createTempKeyTransferFile(String transferId) throws IOException {
+        File directory = FileLoader.getDirectory(FileLoader.MEDIA_DIR_CACHE);
+        File file = new File(directory, KEY_TRANSFER_FILE_PREFIX + transferId + KEY_TRANSFER_FILE_EXTENSION);
+        int suffix = 1;
+        while (file.exists()) {
+            file = new File(directory, KEY_TRANSFER_FILE_PREFIX + transferId + "_" + suffix + KEY_TRANSFER_FILE_EXTENSION);
+            suffix++;
         }
         return file;
     }
@@ -943,6 +1226,86 @@ public class EncryptionManager {
         AndroidUtilities.runOnUIThread(() ->
             Toast.makeText(ApplicationLoader.applicationContext, text, Toast.LENGTH_LONG).show()
         );
+    }
+
+    private static void sendKeyTransferAck(int account, String transferId) {
+        AndroidUtilities.runOnUIThread(() -> {
+            long selfId = UserConfig.getInstance(account).getClientUserId();
+            if (selfId == 0) {
+                return;
+            }
+            HashMap<String, String> params = new HashMap<>();
+            params.put(PARAM_SKIP_AUTO_ENCRYPTION, "1");
+            SendMessagesHelper.SendMessageParams sendMessageParams = SendMessagesHelper.SendMessageParams.of(
+                    KEY_TRANSFER_ACK_PREFIX + transferId,
+                    selfId,
+                    null,
+                    null,
+                    null,
+                    true,
+                    null,
+                    null,
+                    params,
+                    false,
+                    0,
+                    0,
+                    null,
+                    false
+            );
+            AccountInstance.getInstance(account).getSendMessagesHelper().sendMessage(sendMessageParams);
+        });
+    }
+
+    private static void validateImportedKeyPair(String publicKeyB64, String privateKeyB64) throws GeneralSecurityException {
+        PublicKey publicKey = decodePublicKey("RSA", publicKeyB64);
+        PrivateKey privateKey = decodePrivateKey("RSA", privateKeyB64);
+        byte[] probe = new byte[32];
+        new SecureRandom().nextBytes(probe);
+        byte[] encrypted = rsaEncrypt(probe, publicKey);
+        byte[] decrypted = rsaDecryptOrNull(encrypted, privateKey);
+        if (decrypted == null || decrypted.length != probe.length) {
+            throw new GeneralSecurityException("Invalid key pair");
+        }
+        for (int i = 0; i < probe.length; i++) {
+            if (probe[i] != decrypted[i]) {
+                throw new GeneralSecurityException("Invalid key pair");
+            }
+        }
+    }
+
+    private static String generateKeyTransferPassword() {
+        SecureRandom secureRandom = new SecureRandom();
+        StringBuilder builder = new StringBuilder(KEY_TRANSFER_PASSWORD_GROUPS * (KEY_TRANSFER_PASSWORD_GROUP_SIZE + 1));
+        for (int group = 0; group < KEY_TRANSFER_PASSWORD_GROUPS; group++) {
+            if (group > 0) {
+                builder.append('-');
+            }
+            for (int i = 0; i < KEY_TRANSFER_PASSWORD_GROUP_SIZE; i++) {
+                int index = secureRandom.nextInt(KEY_TRANSFER_PASSWORD_ALPHABET.length());
+                builder.append(KEY_TRANSFER_PASSWORD_ALPHABET.charAt(index));
+            }
+        }
+        return builder.toString();
+    }
+
+    private static String normalizeKeyTransferPassword(String password) {
+        if (TextUtils.isEmpty(password)) {
+            return "";
+        }
+        StringBuilder builder = new StringBuilder(password.length());
+        for (int i = 0; i < password.length(); i++) {
+            char ch = password.charAt(i);
+            if (Character.isLetterOrDigit(ch)) {
+                builder.append(Character.toUpperCase(ch));
+            }
+        }
+        return builder.toString();
+    }
+
+    private static String generateTransferId() {
+        byte[] bytes = new byte[8];
+        new SecureRandom().nextBytes(bytes);
+        return Utilities.bytesToHex(bytes).toLowerCase();
     }
 
     private static class KeyBundle {

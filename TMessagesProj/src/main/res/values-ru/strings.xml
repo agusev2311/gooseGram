@@ -285,4 +285,23 @@
     <string name="EncryptionMessageKeyDecryptError">Зашифровано: ошибка ключа</string>
     <string name="EncryptionMessageDecryptError">Зашифровано: ошибка расшифровки</string>
     <string name="EncryptionMessageSignatureError">Зашифровано: ошибка подписи</string>
-</resources>
+    <string name="EncryptionKeyTransfer">Передать закрытый ключ</string>
+    <string name="EncryptionKeyTransferDialogTitle">Одноразовый пароль</string>
+    <string name="EncryptionKeyTransferPasswordText">Зашифрованный файл ключа отправлен в Избранное.\n\nОткройте его на другом устройстве и введите этот одноразовый пароль:\n\n%1$s</string>
+    <string name="EncryptionKeyTransferPasswordCopied">Пароль скопирован</string>
+    <string name="EncryptionKeyTransferDocumentCaption">Передача закрытого ключа. Откройте этот файл на другом устройстве и введите одноразовый пароль.</string>
+    <string name="EncryptionKeyTransferImportTitle">Импорт закрытого ключа</string>
+    <string name="EncryptionKeyTransferPasswordHint">Введите одноразовый пароль</string>
+    <string name="EncryptionKeyTransferPasswordEmpty">Введите одноразовый пароль</string>
+    <string name="EncryptionKeyTransferDownloadFirst">Сначала скачайте файл переноса</string>
+    <string name="EncryptionKeyTransferInvalidFile">Файл переноса поврежден или имеет неверный формат</string>
+    <string name="EncryptionKeyTransferInvalidPassword">Неверный пароль или поврежденный файл</string>
+    <string name="EncryptionKeyTransferWrongAccount">Этот файл создан для другого Telegram-аккаунта</string>
+    <string name="EncryptionKeyTransferImportSuccess">Закрытый ключ успешно импортирован</string>
+    <string name="EncryptionKeyTransferAckMessage">Передача закрытого ключа успешно завершена</string>
+    <string name="EncryptionKeyTransferExportFailed">Не удалось подготовить передачу закрытого ключа</string>
+    <string name="EncryptionToggleEnable">Включить шифрование</string>
+    <string name="EncryptionToggleDisable">Выключить шифрование</string>
+    <string name="EncryptionToggleEnabled">Шифрование в этом чате включено</string>
+    <string name="EncryptionToggleDisabled">Шифрование в этом чате выключено</string>
+  </resources>

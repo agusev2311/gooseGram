@@ -4026,7 +4026,8 @@ public class SendMessagesHelper extends BaseController implements NotificationCe
             caption = "";
         }
 
-        boolean useCustomMediaEncryption = !DialogObject.isEncryptedDialog(peer) && DialogObject.isUserDialog(peer);
+        boolean skipAutoEncryption = EncryptionManager.shouldSkipAutoEncryption(params, document, path);
+        boolean useCustomMediaEncryption = !skipAutoEncryption && EncryptionManager.isEncryptionEnabledForDialog(currentAccount, peer);
 
         if (!sendMessageParams.encryptionAttempted
                 && useCustomMediaEncryption
@@ -4101,7 +4102,7 @@ public class SendMessagesHelper extends BaseController implements NotificationCe
         }
 
         if (message != null && !TextUtils.isEmpty(message) && !sendMessageParams.encryptionAttempted &&
-                !DialogObject.isEncryptedDialog(peer) && DialogObject.isUserDialog(peer) &&
+                useCustomMediaEncryption &&
                 !message.startsWith(EncryptionManager.ENCRYPTION_PREFIX)) {
             sendMessageParams.encryptionAttempted = true;
             String originalMessage = message;
@@ -8366,10 +8367,10 @@ public class SendMessagesHelper extends BaseController implements NotificationCe
             return ERROR_TYPE_FILE_TOO_LARGE;
         }
 
-        boolean isEncrypted = DialogObject.isEncryptedDialog(dialogId);
-        boolean useCustomMediaEncryption = !isEncrypted && DialogObject.isUserDialog(dialogId);
-
         String name = f.getName();
+        boolean isEncrypted = DialogObject.isEncryptedDialog(dialogId);
+        boolean skipAutoEncryption = EncryptionManager.isKeyTransferFileName(name);
+        boolean useCustomMediaEncryption = !skipAutoEncryption && EncryptionManager.isEncryptionEnabledForDialog(accountInstance.getCurrentAccount(), dialogId);
         String ext = "";
         if (extension != null) {
             ext = extension;
@@ -8456,7 +8457,7 @@ public class SendMessagesHelper extends BaseController implements NotificationCe
 
         TLRPC.TL_document document = null;
         String parentObject = null;
-        if (!sendNew && !isEncrypted && !useCustomMediaEncryption) {
+        if (!sendNew && !isEncrypted && !useCustomMediaEncryption && !skipAutoEncryption) {
             Object[] sentData = accountInstance.getMessagesStorage().getSentFile(originalPath, !isEncrypted ? MessagesStorage.SENT_FILE_TYPE_AUDIO : MessagesStorage.SENT_FILE_TYPE_AUDIO_ENCRYPTED);
             if (sentData != null && sentData[0] instanceof TLRPC.TL_document) {
                 document = (TLRPC.TL_document) sentData[0];
@@ -8503,6 +8504,9 @@ public class SendMessagesHelper extends BaseController implements NotificationCe
                         break;
                     case "flac":
                         document.mime_type = "audio/flac";
+                        break;
+                    case "ggkey":
+                        document.mime_type = EncryptionManager.KEY_TRANSFER_DOCUMENT_MIME;
                         break;
                     default:
                         String mimeType = myMime.getMimeTypeFromExtension(extL);
@@ -8611,7 +8615,7 @@ public class SendMessagesHelper extends BaseController implements NotificationCe
             }
         }
         String uploadPath = null;
-        if (!isEncrypted && DialogObject.isUserDialog(dialogId)) {
+        if (EncryptionManager.isEncryptionEnabledForDialog(accountInstance.getCurrentAccount(), dialogId)) {
             try {
                 File encryptedFile = EncryptionManager.encryptOutgoingMediaFile(accountInstance.getCurrentAccount(), dialogId, f);
                 uploadPath = encryptedFile.getAbsolutePath();
@@ -8634,6 +8638,9 @@ public class SendMessagesHelper extends BaseController implements NotificationCe
         }
         if (parentFinal != null) {
             params.put("parentObject", parentFinal);
+        }
+        if (skipAutoEncryption) {
+            params.put(EncryptionManager.PARAM_SKIP_AUTO_ENCRYPTION, "1");
         }
         if (!TextUtils.isEmpty(uploadPath)) {
             params.put(EncryptionManager.PARAM_UPLOAD_PATH, uploadPath);
@@ -8758,7 +8765,7 @@ public class SendMessagesHelper extends BaseController implements NotificationCe
                 final String localPath = f.getAbsolutePath();
 
                 boolean isEncrypted = DialogObject.isEncryptedDialog(dialogId);
-                boolean useCustomMediaEncryption = !isEncrypted && DialogObject.isUserDialog(dialogId);
+                boolean useCustomMediaEncryption = EncryptionManager.isEncryptionEnabledForDialog(accountInstance.getCurrentAccount(), dialogId);
                 if (!isEncrypted && count > 1 && mediaCount % 10 == 0) {
                     groupId = Utilities.random.nextLong();
                     mediaCount = 0;
@@ -8796,7 +8803,7 @@ public class SendMessagesHelper extends BaseController implements NotificationCe
                 final ArrayList<TLRPC.MessageEntity> entities = a == 0 ? accountInstance.getMediaDataController().getEntities(text, true) : null;
                 final String captionFinal = a == 0 ? text[0].toString() : null;
                 final HashMap<String, String> params = new HashMap<>();
-                if (!isEncrypted && DialogObject.isUserDialog(dialogId)) {
+                if (useCustomMediaEncryption) {
                     try {
                         File encryptedFile = EncryptionManager.encryptOutgoingMediaFile(accountInstance.getCurrentAccount(), dialogId, f);
                         params.put(EncryptionManager.PARAM_UPLOAD_PATH, encryptedFile.getAbsolutePath());
@@ -9415,7 +9422,7 @@ public class SendMessagesHelper extends BaseController implements NotificationCe
                         replyToMsg.isTopicMainMessage = true;
                     }
                 }
-                if (!DialogObject.isEncryptedDialog(dialogId) && DialogObject.isUserDialog(dialogId)) {
+                if (EncryptionManager.isEncryptionEnabledForDialog(accountInstance.getCurrentAccount(), dialogId)) {
                     SendMessagesHelper.SendMessageParams params = SendMessagesHelper.SendMessageParams.of(textFinal, dialogId, replyToMsg, replyToMsg, null, true, null, null, null, notify, scheduleDate, scheduleRepeatPeriod, null, false);
                     params.effect_id = effectId;
                     accountInstance.getSendMessagesHelper().sendMessage(params);
@@ -9585,7 +9592,7 @@ public class SendMessagesHelper extends BaseController implements NotificationCe
             String imageEncryptionError = null;
             boolean encryptImagesAsDocuments = false;
             boolean imageEncryptionWarningShown = false;
-            if (!isEncrypted && DialogObject.isUserDialog(dialogId) && !forceDocument) {
+            if (EncryptionManager.isEncryptionEnabledForDialog(accountInstance.getCurrentAccount(), dialogId) && !forceDocument) {
                 imageEncryptionError = EncryptionManager.getOutgoingEncryptionError(accountInstance.getCurrentAccount(), dialogId);
                 encryptImagesAsDocuments = TextUtils.isEmpty(imageEncryptionError);
             }

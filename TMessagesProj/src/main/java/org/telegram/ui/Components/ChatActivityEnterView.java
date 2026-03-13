@@ -123,6 +123,7 @@ import org.telegram.messenger.ChatObject;
 import org.telegram.messenger.ContactsController;
 import org.telegram.messenger.DialogObject;
 import org.telegram.messenger.Emoji;
+import org.telegram.messenger.EncryptionManager;
 import org.telegram.messenger.FileLog;
 import org.telegram.messenger.LiteMode;
 import org.telegram.messenger.LocaleController;
@@ -603,6 +604,7 @@ public class ChatActivityEnterView extends FrameLayout implements
     private int originalViewHeight;
     private LinearLayout attachLayout;
     private ImageView attachButton;
+    private ImageView encryptionToggleButton;
     private ImageView suggestButton;
     @Nullable
     private ImageView botButton;
@@ -2600,7 +2602,10 @@ public class ChatActivityEnterView extends FrameLayout implements
             protected void onLayout(boolean changed, int left, int top, int right, int bottom) {
                 super.onLayout(changed, left, top, right, bottom);
                 if (scheduledButton != null) {
-                    int x = getMeasuredWidth() - dp(botButton != null && botButton.getVisibility() == VISIBLE ? 96 : DEFAULT_HEIGHT) - dp(DEFAULT_HEIGHT);
+                    int x = getMeasuredWidth()
+                            - ChatActivityEnterView.this.getEncryptionToggleSlotWidth()
+                            - ChatActivityEnterView.this.getVisibleAttachButtonsWidth(attachLayout != null && attachLayout.getVisibility() == VISIBLE)
+                            - dp(DEFAULT_HEIGHT);
                     scheduledButton.layout(x, scheduledButton.getTop(), x + scheduledButton.getMeasuredWidth(), scheduledButton.getBottom());
                 }
                 if (!animationParamsX.isEmpty()) {
@@ -3293,6 +3298,19 @@ public class ChatActivityEnterView extends FrameLayout implements
             return onSendLongClick(v);
         });
 
+        if (isChat) {
+            encryptionToggleButton = new ImageView(context);
+            encryptionToggleButton.setScaleType(ImageView.ScaleType.CENTER);
+            encryptionToggleButton.setBackground(Theme.createSelectorDrawable(getThemedColor(Theme.key_listSelector)));
+            encryptionToggleButton.setOnClickListener(v -> {
+                toggleEncryptionForCurrentDialog();
+                v.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP);
+            });
+            encryptionToggleButton.setVisibility(GONE);
+            textFieldContainer.addView(encryptionToggleButton, LayoutHelper.createFrame(DEFAULT_HEIGHT, DEFAULT_HEIGHT, Gravity.BOTTOM | Gravity.RIGHT, 0, 0, DEFAULT_HEIGHT, 0));
+            updateEncryptionToggleButton();
+        }
+
         SharedPreferences sharedPreferences = MessagesController.getGlobalEmojiSettings();
         keyboardHeight = sharedPreferences.getInt("kbd_height", dp(200));
         keyboardHeightLand = sharedPreferences.getInt("kbd_height_land3", dp(200));
@@ -3386,7 +3404,7 @@ public class ChatActivityEnterView extends FrameLayout implements
         if (messageEditText != null && !TextUtils.isEmpty(messageEditText.getText())) {
             String textFinal = SendMessagesHelper.getTrimmedString(messageEditText.getText().toString());
             if (textFinal.length() != 0) {
-                if (!DialogObject.isEncryptedDialog(dialog_id) && DialogObject.isUserDialog(dialog_id)) {
+                if (isCustomEncryptionEnabledForCurrentDialog()) {
                     count++;
                 } else {
                     count += (int) Math.ceil(textFinal.length() / 4096.0f);
@@ -6200,6 +6218,7 @@ public class ChatActivityEnterView extends FrameLayout implements
         updateGiftButton(false);
         checkRoundVideo();
         checkChannelRights();
+        updateEncryptionToggleButton();
         updateFieldHint(false);
         if (messageEditText != null) {
             updateSendAsButton(parentFragment != null && parentFragment.getFragmentBeginToShow());
@@ -6273,6 +6292,86 @@ public class ChatActivityEnterView extends FrameLayout implements
 
     public boolean hasRecordVideo() {
         return hasRecordVideo;
+    }
+
+    private boolean canUseCustomEncryptionForCurrentDialog() {
+        return isChat && EncryptionManager.canUseEncryptionInDialog(currentAccount, dialog_id);
+    }
+
+    private boolean isCustomEncryptionEnabledForCurrentDialog() {
+        return EncryptionManager.isEncryptionEnabledForDialog(currentAccount, dialog_id);
+    }
+
+    private int getVisibleAttachButtonsCount() {
+        if (attachLayout == null) {
+            return 0;
+        }
+        int count = 0;
+        for (int i = 0; i < attachLayout.getChildCount(); i++) {
+            if (attachLayout.getChildAt(i).getVisibility() == VISIBLE) {
+                count++;
+            }
+        }
+        return count;
+    }
+
+    private int getVisibleAttachButtonsWidth(boolean includeAttachLayout) {
+        return includeAttachLayout ? getVisibleAttachButtonsCount() * dp(DEFAULT_HEIGHT) : 0;
+    }
+
+    private int getEncryptionToggleSlotWidth() {
+        return encryptionToggleButton != null && encryptionToggleButton.getVisibility() == VISIBLE ? dp(DEFAULT_HEIGHT) : 0;
+    }
+
+    private void updateAttachLayoutPosition() {
+        if (attachLayout == null) {
+            return;
+        }
+        FrameLayout.LayoutParams layoutParams = (FrameLayout.LayoutParams) attachLayout.getLayoutParams();
+        int rightMargin = getEncryptionToggleSlotWidth();
+        if (layoutParams.rightMargin != rightMargin) {
+            layoutParams.rightMargin = rightMargin;
+            attachLayout.setLayoutParams(layoutParams);
+        }
+    }
+
+    private void updateEncryptionToggleButton() {
+        if (encryptionToggleButton == null) {
+            return;
+        }
+        boolean visible = canUseCustomEncryptionForCurrentDialog()
+                && sendButtonContainer != null
+                && sendButtonContainer.getVisibility() == VISIBLE;
+        if (visible) {
+            boolean enabled = isCustomEncryptionEnabledForCurrentDialog();
+            encryptionToggleButton.setImageResource(enabled ? R.drawable.msg_filled_lockedrecord : R.drawable.msg_filled_unlockedrecord);
+            encryptionToggleButton.setColorFilter(new PorterDuffColorFilter(getThemedColor(Theme.key_glass_defaultIcon), PorterDuff.Mode.MULTIPLY));
+            encryptionToggleButton.setContentDescription(getString(enabled ? R.string.EncryptionToggleDisable : R.string.EncryptionToggleEnable));
+            if (encryptionToggleButton.getVisibility() != VISIBLE) {
+                encryptionToggleButton.setVisibility(VISIBLE);
+            }
+        } else if (encryptionToggleButton.getVisibility() != GONE) {
+            encryptionToggleButton.setVisibility(GONE);
+        }
+        updateAttachLayoutPosition();
+        if (messageEditTextContainer != null) {
+            messageEditTextContainer.requestLayout();
+        }
+        updateFieldRight(lastAttachVisible);
+    }
+
+    private void toggleEncryptionForCurrentDialog() {
+        if (!canUseCustomEncryptionForCurrentDialog()) {
+            return;
+        }
+        boolean enabled = !isCustomEncryptionEnabledForCurrentDialog();
+        EncryptionManager.setEncryptionEnabledForDialog(currentAccount, dialog_id, enabled);
+        updateEncryptionToggleButton();
+        if (parentFragment != null) {
+            BulletinFactory.of(parentFragment)
+                    .createSimpleBulletin(enabled ? R.raw.passcode_lock_close : R.raw.unlock_icon, getString(enabled ? R.string.EncryptionToggleEnabled : R.string.EncryptionToggleDisabled), 2)
+                    .show();
+        }
     }
 
     public MessageObject getReplyingMessageObject() {
@@ -7215,7 +7314,7 @@ public class ChatActivityEnterView extends FrameLayout implements
         }
         boolean supportsNewEntities = supportsSendingNewEntities();
         int maxLength = accountInstance.getMessagesController().maxMessageLength;
-        if (!DialogObject.isEncryptedDialog(dialog_id) && DialogObject.isUserDialog(dialog_id)) {
+        if (isCustomEncryptionEnabledForCurrentDialog()) {
             maxLength = Math.max(maxLength, text.length());
         }
         if (text.length() != 0) {
@@ -8109,20 +8208,15 @@ public class ChatActivityEnterView extends FrameLayout implements
         int oldRightMargin = layoutParams.rightMargin;
         if (isStories && isLiveComment) {
             layoutParams.rightMargin = dp(suggestButtonVisible ? 50 : 2) + Math.max(0, sendButton.width() - dp(DEFAULT_HEIGHT));
-        } else if (attachVisible == 1 || attachVisible == 2/* && layoutParams.rightMargin != dp(2)*/) {
-            if (botButton != null && botButton.getVisibility() == VISIBLE && scheduledButton != null && scheduledButton.getVisibility() == VISIBLE && attachLayout != null && attachLayout.getVisibility() == VISIBLE) {
-                layoutParams.rightMargin = dp(146);
-            } else if (botButton != null && botButton.getVisibility() == VISIBLE || notifyButton != null && notifyButton.getVisibility() == VISIBLE || scheduledButton != null && scheduledButton.getTag() != null) {
-                layoutParams.rightMargin = dp(98);
-            } else {
-                layoutParams.rightMargin = dp(50);
-            }
         } else {
-            if (scheduledButton != null && scheduledButton.getTag() != null) {
-                layoutParams.rightMargin = dp(50);
-            } else {
-                layoutParams.rightMargin = dp(2);
+            int rightButtonsWidth = getEncryptionToggleSlotWidth();
+            if (attachVisible == 1 || attachVisible == 2) {
+                rightButtonsWidth += getVisibleAttachButtonsWidth(true);
             }
+            if (scheduledButton != null && scheduledButton.getTag() != null) {
+                rightButtonsWidth += dp(DEFAULT_HEIGHT);
+            }
+            layoutParams.rightMargin = rightButtonsWidth > 0 ? dp(2) + rightButtonsWidth : dp(2);
         }
         layoutParams.rightMargin = Math.max(layoutParams.rightMargin, Math.max(0, sendButton.width() - dp(DEFAULT_HEIGHT)));
         if (doneButton != null && doneButton.getVisibility() == VISIBLE) {
@@ -9154,6 +9248,9 @@ public class ChatActivityEnterView extends FrameLayout implements
                 attachLayout.setVisibility(GONE);
             }
             sendButtonContainer.setVisibility(GONE);
+            if (encryptionToggleButton != null) {
+                encryptionToggleButton.setVisibility(GONE);
+            }
             if (scheduledButton != null) {
                 scheduledButton.setVisibility(GONE);
             }
@@ -9355,6 +9452,9 @@ public class ChatActivityEnterView extends FrameLayout implements
             audioVideoButtonContainer.setVisibility(GONE);
             attachLayout.setVisibility(GONE);
             sendButtonContainer.setVisibility(GONE);
+            if (encryptionToggleButton != null) {
+                encryptionToggleButton.setVisibility(GONE);
+            }
             if (scheduledButton != null) {
                 scheduledButton.setVisibility(GONE);
             }
@@ -9369,6 +9469,7 @@ public class ChatActivityEnterView extends FrameLayout implements
             currentLimit = -1;
             delegate.onMessageEditEnd(false);
             sendButtonContainer.setVisibility(VISIBLE);
+            updateEncryptionToggleButton();
             cancelBotButton.setScaleX(0.1f);
             cancelBotButton.setScaleY(0.1f);
             cancelBotButton.setAlpha(0.0f);
@@ -9638,6 +9739,9 @@ public class ChatActivityEnterView extends FrameLayout implements
         audioVideoSendButton.setColorFilter(new PorterDuffColorFilter(getThemedColor(Theme.key_glass_defaultIcon), PorterDuff.Mode.SRC_IN));
         emojiButton.setColorFilter(new PorterDuffColorFilter(getThemedColor(Theme.key_glass_defaultIcon), PorterDuff.Mode.SRC_IN));
         emojiButton.setBackground(Theme.createSelectorDrawable(getThemedColor(Theme.key_listSelector)));
+        if (encryptionToggleButton != null) {
+            encryptionToggleButton.setColorFilter(new PorterDuffColorFilter(getThemedColor(Theme.key_glass_defaultIcon), PorterDuff.Mode.MULTIPLY));
+        }
     }
 
     private void updateRecordedDeleteIconColors() {
@@ -13151,6 +13255,10 @@ public class ChatActivityEnterView extends FrameLayout implements
 //        }
         sendButtonContainer.setTranslationX(rightPadding);
         sendButtonContainer.setAlpha(progress);
+        if (encryptionToggleButton != null) {
+            encryptionToggleButton.setTranslationX(rightPadding);
+            encryptionToggleButton.setAlpha(progress);
+        }
         if (suggestButton != null) {
             suggestButton.setAlpha(suggestButton.getScaleX() > 0.7f ? progress : 0);
         }

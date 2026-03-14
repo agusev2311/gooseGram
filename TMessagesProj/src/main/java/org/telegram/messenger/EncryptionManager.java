@@ -6,6 +6,7 @@ import android.text.TextUtils;
 import android.util.Base64;
 import android.widget.Toast;
 
+import org.json.JSONArray;
 import org.json.JSONException;
 import org.json.JSONObject;
 import org.telegram.tgnet.TLRPC;
@@ -213,25 +214,26 @@ public class EncryptionManager {
                 payload.put("rsa_public", keys.rsaPublicB64);
                 payload.put("rsa_private", getPrefs(PREF_KEYS).getString(keyForAccount("rsa_private", account), ""));
                 payload.put("created_at", System.currentTimeMillis());
+                String payloadJson = payload.toString(2);
 
                 byte[] salt = new byte[KEY_TRANSFER_SALT_BYTES];
                 byte[] iv = new byte[GCM_IV_BYTES];
                 SecureRandom secureRandom = new SecureRandom();
                 secureRandom.nextBytes(salt);
                 secureRandom.nextBytes(iv);
-                byte[] encrypted = encryptWithPassword(normalizedPassword, payload.toString().getBytes(StandardCharsets.UTF_8), salt, iv);
+                byte[] encrypted = encryptWithPassword(normalizedPassword, payloadJson.getBytes(StandardCharsets.UTF_8), salt, iv);
 
                 JSONObject filePayload = new JSONObject();
                 filePayload.put("magic", KEY_TRANSFER_MAGIC);
                 filePayload.put("v", 1);
                 filePayload.put("transfer_id", transferId);
-                filePayload.put("salt", Base64.encodeToString(salt, Base64.NO_WRAP));
-                filePayload.put("iv", Base64.encodeToString(iv, Base64.NO_WRAP));
-                filePayload.put("ciphertext", Base64.encodeToString(encrypted, Base64.NO_WRAP));
+                filePayload.put("salt", bytesToJsonArray(salt));
+                filePayload.put("iv", bytesToJsonArray(iv));
+                filePayload.put("ciphertext", bytesToJsonArray(encrypted));
 
                 File transferFile = createTempKeyTransferFile(transferId);
                 try (FileOutputStream outputStream = new FileOutputStream(transferFile)) {
-                    outputStream.write(filePayload.toString().getBytes(StandardCharsets.UTF_8));
+                    outputStream.write(filePayload.toString(2).getBytes(StandardCharsets.UTF_8));
                 }
 
                 AndroidUtilities.runOnUIThread(() -> {
@@ -284,9 +286,9 @@ public class EncryptionManager {
                     return;
                 }
 
-                byte[] salt = Base64.decode(wrapper.getString("salt"), Base64.NO_WRAP);
-                byte[] iv = Base64.decode(wrapper.getString("iv"), Base64.NO_WRAP);
-                byte[] cipherText = Base64.decode(wrapper.getString("ciphertext"), Base64.NO_WRAP);
+                byte[] salt = parseBinaryField(wrapper, "salt");
+                byte[] iv = parseBinaryField(wrapper, "iv");
+                byte[] cipherText = parseBinaryField(wrapper, "ciphertext");
                 byte[] plain = decryptWithPassword(normalizeKeyTransferPassword(password), cipherText, salt, iv);
                 JSONObject payload = new JSONObject(new String(plain, StandardCharsets.UTF_8));
                 if (!TextUtils.equals(KEY_TRANSFER_MAGIC, payload.optString("magic"))) {
@@ -636,7 +638,7 @@ public class EncryptionManager {
         File tempFile = null;
         try {
             KeyBundle keys = ensureKeys(account);
-            byte[] aesKey = tryDecryptAesKey(keys, header.keyToB64, header.keyFromB64);
+            byte[] aesKey = tryDecryptAesKey(keys, header.keyTo, header.keyFrom);
             if (aesKey == null) {
                 return file;
             }
@@ -834,6 +836,10 @@ public class EncryptionManager {
     private static byte[] tryDecryptAesKey(KeyBundle keys, String keyToB64, String keyFromB64) throws GeneralSecurityException {
         byte[] keyTo = Base64.decode(keyToB64, Base64.NO_WRAP);
         byte[] keyFrom = Base64.decode(keyFromB64, Base64.NO_WRAP);
+        return tryDecryptAesKey(keys, keyTo, keyFrom);
+    }
+
+    private static byte[] tryDecryptAesKey(KeyBundle keys, byte[] keyTo, byte[] keyFrom) throws GeneralSecurityException {
         byte[] result = rsaDecryptOrNull(keyTo, keys.rsaPrivate);
         if (result != null) {
             return result;
@@ -872,6 +878,42 @@ public class EncryptionManager {
         return cipher.doFinal(cipherText);
     }
 
+    private static JSONArray bytesToJsonArray(byte[] bytes) {
+        JSONArray array = new JSONArray();
+        for (byte value : bytes) {
+            array.put(value & 0xFF);
+        }
+        return array;
+    }
+
+    private static byte[] parseBinaryField(JSONObject json, String fieldName) throws JSONException {
+        Object value = json.opt(fieldName);
+        if (value instanceof JSONArray) {
+            return jsonArrayToBytes((JSONArray) value, fieldName);
+        }
+        if (value instanceof String) {
+            try {
+                return Base64.decode((String) value, Base64.NO_WRAP);
+            } catch (IllegalArgumentException e) {
+                throw new JSONException("Invalid base64 in " + fieldName);
+            }
+        }
+        throw new JSONException("Invalid field type for " + fieldName);
+    }
+
+    private static byte[] jsonArrayToBytes(JSONArray array, String fieldName) throws JSONException {
+        int length = array.length();
+        byte[] data = new byte[length];
+        for (int i = 0; i < length; i++) {
+            int value = array.getInt(i);
+            if (value < 0 || value > 255) {
+                throw new JSONException("Invalid byte value in " + fieldName + " at index " + i);
+            }
+            data[i] = (byte) value;
+        }
+        return data;
+    }
+
     private static byte[] derivePasswordKey(String password, byte[] salt) throws GeneralSecurityException {
         PBEKeySpec keySpec = new PBEKeySpec(password.toCharArray(), salt, KEY_TRANSFER_PBKDF2_ITERATIONS, AES_KEY_SIZE_BYTES * 8);
         try {
@@ -890,15 +932,17 @@ public class EncryptionManager {
         new SecureRandom().nextBytes(aesKey);
         byte[] iv = new byte[GCM_IV_BYTES];
         new SecureRandom().nextBytes(iv);
+        byte[] keyTo = rsaEncrypt(aesKey, context.peerKey.rsaPublic);
+        byte[] keyFrom = rsaEncrypt(aesKey, context.keys.rsaPublic);
 
         JSONObject header = new JSONObject();
         header.put("v", 1);
         header.put("sender", context.senderUserId);
-        header.put("iv", Base64.encodeToString(iv, Base64.NO_WRAP));
-        header.put("key_to", Base64.encodeToString(rsaEncrypt(aesKey, context.peerKey.rsaPublic), Base64.NO_WRAP));
-        header.put("key_from", Base64.encodeToString(rsaEncrypt(aesKey, context.keys.rsaPublic), Base64.NO_WRAP));
+        header.put("iv", bytesToJsonArray(iv));
+        header.put("key_to", bytesToJsonArray(keyTo));
+        header.put("key_from", bytesToJsonArray(keyFrom));
 
-        byte[] headerBytes = header.toString().getBytes(StandardCharsets.UTF_8);
+        byte[] headerBytes = header.toString(2).getBytes(StandardCharsets.UTF_8);
         File targetFile = createTempBinaryFile(sourceFile.getName());
         Cipher cipher = Cipher.getInstance("AES/GCM/NoPadding");
         cipher.init(Cipher.ENCRYPT_MODE, new SecretKeySpec(aesKey, "AES"), new GCMParameterSpec(GCM_TAG_BITS, iv));
@@ -959,9 +1003,9 @@ public class EncryptionManager {
             inputStream.readFully(headerBytes);
             JSONObject header = new JSONObject(new String(headerBytes, StandardCharsets.UTF_8));
             return new EncryptedFileHeader(
-                    Base64.decode(header.getString("iv"), Base64.NO_WRAP),
-                    header.getString("key_to"),
-                    header.getString("key_from")
+                    parseBinaryField(header, "iv"),
+                    parseBinaryField(header, "key_to"),
+                    parseBinaryField(header, "key_from")
             );
         }
     }
@@ -1342,13 +1386,13 @@ public class EncryptionManager {
 
     private static class EncryptedFileHeader {
         final byte[] iv;
-        final String keyToB64;
-        final String keyFromB64;
+        final byte[] keyTo;
+        final byte[] keyFrom;
 
-        EncryptedFileHeader(byte[] iv, String keyToB64, String keyFromB64) {
+        EncryptedFileHeader(byte[] iv, byte[] keyTo, byte[] keyFrom) {
             this.iv = iv;
-            this.keyToB64 = keyToB64;
-            this.keyFromB64 = keyFromB64;
+            this.keyTo = keyTo;
+            this.keyFrom = keyFrom;
         }
     }
 }
